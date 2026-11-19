@@ -1,0 +1,23 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "NSAudioCaptureUsageDescription": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stelix listens to your Mac's audio to split it into stems. Everything stays on this Mac."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stelix ascolta l'audio del Mac per separarlo in stem. Tutto resta su questo Mac."
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

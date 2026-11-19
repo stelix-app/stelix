@@ -1,0 +1,15 @@
+build/
+DerivedData/
+*.xcodeproj
+.venv/
+*.safetensors
+*.ckpt
+*.wav
+*.metallib
+sidecar/dist/
+.DS_Store
+.superpowers/
+.build/
+*.egg-info/
+__pycache__/
+release/

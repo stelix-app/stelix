@@ -1,0 +1,60 @@
+Stelix
+Copyright (C) 2026 Gabriele Carsana
+https://github.com/stelix-app/stelix
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, version 3 of the License.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program, in the file LICENSE. If not, see <https://www.gnu.org/licenses/>.
+
+
+ADDITIONAL TERMS UNDER SECTION 7 OF THE GNU GENERAL PUBLIC LICENSE, VERSION 3
+
+The copyright holder supplements the License with the terms below, as its
+section 7 permits. They apply to all the material of this program that belongs
+to the copyright holder named above: every file that refers to this NOTICE
+file, and every file of the program that carries no notice of its own.
+
+1. Author attribution (section 7(b)).
+
+   Every copy of this program, and every work based on it, must preserve the
+   author attribution
+
+       Copyright (C) 2026 Gabriele Carsana
+
+   together with the address of the original project given at the top of this
+   file:
+
+   (a) in each source file that carries it and in this NOTICE file; and
+   (b) in the Appropriate Legal Notices that the program displays, that is, in
+       its About window or in whatever takes its place.
+
+   You may add your own copyright notices for your changes next to it. You may
+   not remove it, alter it or make it harder to see.
+
+2. Origin and modified versions (section 7(c)).
+
+   You may not misrepresent the origin of this program. A modified version
+   must be marked as different from the original in a reasonable way: its
+   About window and its documentation must say that it is a modified version,
+   who modified it, and that it is not the original program.
+
+3. Names and marks (section 7(e)).
+
+   The License grants no rights under trademark law in the name of this
+   program, its logo or its icon. In particular, it gives no right to use them
+   to identify a modified version, beyond saying truthfully that the modified
+   version is based on this program.
+
+
+THIRD-PARTY SOFTWARE
+
+This program is distributed together with software written by other people,
+under their own licenses: see THIRD_PARTY_NOTICES.md. The additional terms
+above do not apply to that software.

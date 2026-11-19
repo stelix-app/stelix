@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Gabriele Carsana. See the NOTICE file for the additional terms.
+
+name: Stelix
+options:
+  bundleIdPrefix: io.github.stelix-app
+  developmentLanguage: en
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    SWIFT_VERSION: "6"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "${STELIX_SIGN_IDENTITY}"  # set by scripts/build.sh
+    ENABLE_HARDENED_RUNTIME: YES
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: NO
+packages:
+  StelixCore:
+    path: Packages/StelixCore
+  DemucsMLX:
+    url: https://github.com/kylehowells/demucs-mlx-swift.git
+    revision: 8d9743208589c310df4ef82508eda2f56bc1c30d
+targets:
+  Stelix:
+    type: application
+    platform: macOS
+    sources:
+      - App
+    dependencies:
+      - package: StelixCore
+      - target: StelixEngine
+        copy:
+          destination: executables
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.stelix-app.stelix
+        INFOPLIST_FILE: App/Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        PRODUCT_NAME: Stelix
+        ASSETCATALOG_COMPILER_APPICON_NAME: Stelix
+  StelixEngine:
+    type: tool
+    platform: macOS
+    sources:
+      - Engine
+    dependencies:
+      - package: StelixCore
+      - package: DemucsMLX
+        product: DemucsMLX
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.stelix-app.stelix.engine
+        PRODUCT_NAME: StelixEngine
+        # MusicUnderstanding (the BPM) exists from macOS 27: weak, so the engine starts on 15 and 26.
+        OTHER_LDFLAGS: ["$(inherited)", "-weak_framework", "MusicUnderstanding"]
+schemes:
+  Stelix:
+    build:
+      targets:
+        Stelix: all
+    run:
+      config: Release
