@@ -71,6 +71,9 @@ public final class StreamingSeparator {
     private let guardFrames: Int
     /// Provisional frames after the band: `[edge - lookahead, edge - guard)`.
     public let provisionalFrames: Int
+    /// `true` if the last `step` that returned a chunk did not call the model: its window was exact
+    /// silence (an app holding the output open with nothing playing), so the stems are silence too.
+    public private(set) var lastStepSkippedModel = false
     private var tail: [Float] = []        // [stem][crossfade][2]
     private var tailStart: Int64 = -1     // device frame `tail` starts from
 
@@ -112,54 +115,17 @@ public final class StreamingSeparator {
         var raw = [Float](repeating: 0, count: have * channels)
         let copied = raw.withUnsafeMutableBufferPointer { ring.copy(from: edge - Int64(have), frames: have, into: $0.baseAddress!) }
         guard copied else { throw StreamingSeparatorError.windowLost }
-        var planar = [Float](repeating: 0, count: 2 * window)
-        for f in 0..<have {
-            let l = raw[f * channels]
-            planar[pad + f] = l
-            planar[window + pad + f] = channels > 1 ? raw[f * channels + 1] : l
-        }
-        raw = []
-
-        let modelRate = model.sampleRate
-        let sameRate = modelRate == deviceRate
-        let modelIn = sameRate ? planar : Self.fit(resampler.convert(planarStereo: planar, from: deviceRate, to: modelRate),
-                                                    frames: model.windowFrames)
-        let separated = try model.separate(planarStereo: modelIn)
-        guard separated.count == model.stems.count,
-              separated.allSatisfy({ $0.count == 2 * model.windowFrames })
-        else { throw StreamingSeparatorError.badModelOutput }
-
-        // `[start, end + provisional)` in model time, with a margin per side.
-        let provisional = provisionalFrames
-        let ratio = modelRate / deviceRate
-        let modelStart = Int((Double(start - windowStart) * ratio).rounded()) - Self.edgeModelFrames
-        let modelEnd = Int((Double(end + Int64(provisional) - windowStart) * ratio).rounded()) + Self.edgeModelFrames
-        let segmentFrames = modelEnd - modelStart
-        // Distance, in device frames, between the start of the segment and `start`.
-        let offset = Int((Double(start - windowStart) - Double(modelStart) / ratio).rounded())
-
-        let wanted = hop + provisional
+        let wanted = hop + provisionalFrames
         let stems = model.stems.count
         var data = [Float](repeating: 0, count: stems * wanted * 2)
-        let modelFrames = model.windowFrames
-        for s in 0..<stems {
-            var segment = [Float](repeating: 0, count: 2 * segmentFrames)
-            let source = separated[s]
-            for c in 0..<2 {
-                for i in 0..<segmentFrames {
-                    let m = modelStart + i
-                    if m >= 0 && m < modelFrames { segment[c * segmentFrames + i] = source[c * modelFrames + m] }
-                }
-            }
-            let back = sameRate ? segment : resampler.convert(planarStereo: segment, from: modelRate, to: deviceRate)
-            let backFrames = back.count / 2
-            for f in 0..<wanted {
-                let i = offset + f
-                guard i >= 0 && i < backFrames else { continue }
-                data[(s * wanted + f) * 2] = back[i]
-                data[(s * wanted + f) * 2 + 1] = back[backFrames + i]
-            }
+        // Exact silence in the whole window (the padding is zero too): the stems are silence, no model pass.
+        // The join and the tail below run as usual, as if the model had returned zeros.
+        lastStepSkippedModel = !raw.contains { $0 != 0 }
+        if !lastStepSkippedModel {
+            try separate(raw: raw, channels: channels, have: have, pad: pad, start: start, end: end,
+                         windowStart: windowStart, into: &data)
         }
+        raw = []
 
         // Join with the tail of the previous step, if the bands touch.
         if tailStart == start && crossfade > 0 {
@@ -185,6 +151,59 @@ public final class StreamingSeparator {
         tail = newTail
         tailStart = end
         return StemChunk(startFrame: start, frames: wanted, settledFrames: hop, data: data)
+    }
+
+    /// The model pass: the window to the model's rate, the model, then the band and the provisional band
+    /// back to the device rate into `data` ([stem][frame][channel]).
+    private func separate(raw: [Float], channels: Int, have: Int, pad: Int, start: Int64, end: Int64,
+                          windowStart: Int64, into data: inout [Float]) throws {
+        let window = windowDeviceFrames
+        var planar = [Float](repeating: 0, count: 2 * window)
+        for f in 0..<have {
+            let l = raw[f * channels]
+            planar[pad + f] = l
+            planar[window + pad + f] = channels > 1 ? raw[f * channels + 1] : l
+        }
+
+        let modelRate = model.sampleRate
+        let sameRate = modelRate == deviceRate
+        let modelIn = sameRate ? planar : Self.fit(resampler.convert(planarStereo: planar, from: deviceRate, to: modelRate),
+                                                    frames: model.windowFrames)
+        let separated = try model.separate(planarStereo: modelIn)
+        guard separated.count == model.stems.count,
+              separated.allSatisfy({ $0.count == 2 * model.windowFrames })
+        else { throw StreamingSeparatorError.badModelOutput }
+
+        // `[start, end + provisional)` in model time, with a margin per side.
+        let provisional = provisionalFrames
+        let ratio = modelRate / deviceRate
+        let modelStart = Int((Double(start - windowStart) * ratio).rounded()) - Self.edgeModelFrames
+        let modelEnd = Int((Double(end + Int64(provisional) - windowStart) * ratio).rounded()) + Self.edgeModelFrames
+        let segmentFrames = modelEnd - modelStart
+        // Distance, in device frames, between the start of the segment and `start`.
+        let offset = Int((Double(start - windowStart) - Double(modelStart) / ratio).rounded())
+
+        let wanted = timing.hopFrames + provisional
+        let stems = model.stems.count
+        let modelFrames = model.windowFrames
+        for s in 0..<stems {
+            var segment = [Float](repeating: 0, count: 2 * segmentFrames)
+            let source = separated[s]
+            for c in 0..<2 {
+                for i in 0..<segmentFrames {
+                    let m = modelStart + i
+                    if m >= 0 && m < modelFrames { segment[c * segmentFrames + i] = source[c * modelFrames + m] }
+                }
+            }
+            let back = sameRate ? segment : resampler.convert(planarStereo: segment, from: modelRate, to: deviceRate)
+            let backFrames = back.count / 2
+            for f in 0..<wanted {
+                let i = offset + f
+                guard i >= 0 && i < backFrames else { continue }
+                data[(s * wanted + f) * 2] = back[i]
+                data[(s * wanted + f) * 2 + 1] = back[backFrames + i]
+            }
+        }
     }
 
     /// Brings every channel of a planar block to exactly `frames` frames (truncates or zero-pads).

@@ -248,6 +248,61 @@ struct StreamingSeparatorTests {
         #expect(chunk.frames <= timing.hopFrames + timing.lookaheadFrames)
     }
 
+    // MARK: Exact silence skips the model
+
+    @Test func silentWindowSkipsTheModel() throws {
+        let model = IdentityModel(windowFrames: Self.window)
+        let timing = LiveTiming(level: .base, deviceRate: 44_100)
+        let separator = StreamingSeparator(model: model, timing: timing, deviceRate: 44_100, resampler: AVResampler())
+        let ring = SPSCRingBuffer(channels: 2, capacityFrames: 44_100 * 12)
+        let frames = timing.hopFrames + timing.lookaheadFrames
+        ring.write([Float](repeating: 0, count: frames * 2), frames: frames)
+        let chunk = try #require(try separator.step(ring: ring, edge: Int64(frames)))
+        #expect(chunk.data.allSatisfy { $0 == 0 })
+        #expect(chunk.settledFrames == timing.hopFrames)
+        #expect(model.calls == 0)
+        #expect(separator.lastStepSkippedModel)
+    }
+
+    @Test func oneTinySampleRunsTheModel() throws {
+        let model = IdentityModel(windowFrames: Self.window)
+        let timing = LiveTiming(level: .base, deviceRate: 44_100)
+        let separator = StreamingSeparator(model: model, timing: timing, deviceRate: 44_100, resampler: AVResampler())
+        let ring = SPSCRingBuffer(channels: 2, capacityFrames: 44_100 * 12)
+        let frames = timing.hopFrames + timing.lookaheadFrames
+        var input = [Float](repeating: 0, count: frames * 2)
+        input[frames] = 1e-9          // a dither-level sample is not silence
+        ring.write(input, frames: frames)
+        _ = try #require(try separator.step(ring: ring, edge: Int64(frames)))
+        #expect(model.calls == 1)
+        #expect(!separator.lastStepSkippedModel)
+    }
+
+    @Test func musicAfterSilenceKeepsTheDeclaredDelay() throws {
+        let model = IdentityModel(windowFrames: Self.window)
+        let sim = LiveSimulator(level: .base, deviceRate: 44_100, model: model)
+        let impulse: Int64 = 441_000 + 300          // after 10 s of exact zeros
+        sim.injectImpulse(atInputFrame: impulse)
+        sim.run(callbacks: Int((impulse + 4 * 44_100) / 512), framesPerCallback: 512)
+        #expect(sim.outputImpulseFrame - impulse == Int64(sim.timing.delayFrames))
+        #expect(sim.underruns == 0)
+        #expect(model.calls < sim.chunks.count)
+    }
+
+    @Test func silenceAfterMusicEndsInExactZerosAndStopsTheModel() throws {
+        let model = IdentityModel(windowFrames: Self.window)
+        let sim = LiveSimulator(level: .base, deviceRate: 44_100, model: model)
+        let second = 44_100 / 512
+        sim.constant = 0.5
+        sim.run(callbacks: 3 * second, framesPerCallback: 512)
+        sim.constant = 0
+        sim.run(callbacks: 10 * second, framesPerCallback: 512)
+        let callsBefore = model.calls
+        sim.run(callbacks: 2 * second, framesPerCallback: 512)
+        #expect(model.calls == callsBefore)
+        #expect(sim.output.suffix(2 * second * 512).allSatisfy { $0 == 0 })
+    }
+
     @Test func monoRingIsDuplicatedOnBothChannels() throws {
         let model = IdentityModel(windowFrames: Self.window)
         let timing = LiveTiming(level: .base, deviceRate: 44_100)

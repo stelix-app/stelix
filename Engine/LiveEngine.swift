@@ -46,6 +46,9 @@ final class LiveEngine: @unchecked Sendable {
     private var lastWritten: Int64 = 0
     private var lastFillEmit = -1.0
     private var waitingForAudio = false
+    /// Until the first sound, silence (exact zeros or no frames) is a wait for the Mac's audio. Born with
+    /// `start` only: a rebuild does not end the wait.
+    private var presence = LiveAudioPresence()
     /// When the output has changed, until the signal returns: for the log only.
     private var deviceChangedAt: Double?
     private var lastStats = DispatchTime.now()
@@ -120,6 +123,7 @@ final class LiveEngine: @unchecked Sendable {
             restretches = 0
             transpose = .off
             idle = LiveIdleTimer(startedAt: Self.now())
+            presence = LiveAudioPresence()
             emit(.live(.warming))
             watcher = DeviceWatcher { [weak self] in self?.control.async { self?.deviceChanged() } }
             startMonitor()
@@ -467,6 +471,13 @@ final class LiveEngine: @unchecked Sendable {
         emit(.live(.stopped))
     }
 
+    /// `.waitingForAudio`, once until something else is said.
+    private func sayWaitingForAudio() {
+        guard !waitingForAudio else { return }
+        waitingForAudio = true
+        emit(.live(.waitingForAudio))
+    }
+
     /// Minutes without sound: the same path as `stop` (tap away, the audio returns to normal), the model
     /// and MLX's cache released, then `.stoppedForSilence`. The app goes back to Original, which shuts the engine down.
     private func stopForSilence() {
@@ -569,30 +580,50 @@ final class LiveEngine: @unchecked Sendable {
             return
         }
 
+        let signal = pipeline.takeSignal()
+        let waiting = presence.observe(signal: signal)
+
         if !pipeline.isRunning {
             // It plays when the ring has the delay and the timeline already covers one hop beyond the
             // playback point: the model's first pass can last longer than the margin (warm-up).
             let playFrame = written - Int64(delay)
             if playFrame >= 0, pipeline.timeline.availableUpTo >= playFrame + Int64(pipeline.timing.hopFrames) {
                 pipeline.startPlaying()
-                emit(.live(.running))
-            } else if !outputRunning, written == lastWritten {
-                // Mac silent: no frames until something plays. It is said once.
-                if !waitingForAudio {
-                    waitingForAudio = true
-                    emit(.live(.waitingForAudio))
+                if waiting {
+                    // Only exact silence so far (an app holds the output open): it plays, so the first
+                    // sound needs no fill, but for the user it is still a wait.
+                    sayWaitingForAudio()
+                } else {
+                    waitingForAudio = false
+                    emit(.live(.running))
                 }
             } else {
-                if waitingForAudio {
-                    waitingForAudio = false
-                    lastFillEmit = -1    // the next fill is sent even if it is still 0
-                }
-                let fraction = min(1, (Double(written) / Double(max(1, delay)) * 20).rounded(.down) / 20)
-                if fraction > lastFillEmit {
-                    lastFillEmit = fraction
-                    emit(.live(.filling(fraction: fraction)))
+                let settle = Int64((pipeline.timing.deviceRate * LiveAudioPresence.settleSeconds).rounded())
+                switch LiveAudioPresence.beforePlay(written: written, newFrames: written != lastWritten,
+                                                    outputRunning: outputRunning, waiting: waiting,
+                                                    settleFrames: settle) {
+                case .waitForAudio:
+                    // Mac silent: no frames, or only exact zeros, until something plays. It is said once.
+                    sayWaitingForAudio()
+                case .hold:
+                    break
+                case .fill:
+                    if waitingForAudio {
+                        waitingForAudio = false
+                        lastFillEmit = -1    // the next fill is sent even if it is still 0
+                    }
+                    let fraction = min(1, (Double(written) / Double(max(1, delay)) * 20).rounded(.down) / 20)
+                    if fraction > lastFillEmit {
+                        lastFillEmit = fraction
+                        emit(.live(.filling(fraction: fraction)))
+                    }
                 }
             }
+        } else if waitingForAudio, !waiting {
+            // It started playing on exact silence: the first sound ends the wait. A pause later is no wait,
+            // Live stays ready (the model skips the silent windows) until the 5 minutes of LiveIdleTimer.
+            waitingForAudio = false
+            emit(.live(.running))
         }
 
         let delta = written - lastWritten
@@ -600,7 +631,6 @@ final class LiveEngine: @unchecked Sendable {
         if delta > 0, var dog = watchdog {
             // The watchdog counts in the rate it was born with; after a rate change it is converted.
             let frames = Int((Double(delta) * dog.sampleRate / pipeline.timing.deviceRate).rounded())
-            let signal = pipeline.takeSignal()
             if signal, let changed = deviceChangedAt {
                 // Diagnostics of the double rebuild toward the speakers.
                 engineLog(String(format: "live: first signal %.2f s after the output change", Self.now() - changed))
@@ -914,6 +944,8 @@ final class SeparationWorker: @unchecked Sendable {
     private let times = Mutex<[Double]>([])
     private let latestLevels = Mutex<(sequence: Int, rms: [Float])>((0, []))
     private static let timesKept = 20
+    /// Seconds of skipped passes after which the next real pass is logged.
+    private static let longSilence: Double = 8
 
     init(ring: SPSCRingBuffer, timeline: StemTimeline, timing: LiveTiming, model: SeparationModel) {
         self.ring = ring
@@ -958,6 +990,7 @@ final class SeparationWorker: @unchecked Sendable {
         let hop = Int64(timing.hopFrames)
         var nextEdge = StreamingSeparator.firstEdge(timing)
         var lastError: String?
+        var silentSince: Int64?     // edge of the first skipped pass in a row
 
         while !stopFlag.load(ordering: .relaxed) {
             let written = ring.writtenFrames
@@ -969,9 +1002,12 @@ final class SeparationWorker: @unchecked Sendable {
             // underrun anyway, and the crossfade restarts from zero.
             if written - nextEdge >= hop { nextEdge += (written - nextEdge) / hop * hop }
             let began = DispatchTime.now().uptimeNanoseconds
+            var skipped = false
             do {
                 if let separated = try separator.step(ring: ring, edge: nextEdge) {
-                    let chunk = gated(separated)
+                    // A window of exact silence did not reach the model: its stems are already zero.
+                    skipped = separator.lastStepSkippedModel
+                    let chunk = skipped ? separated : gated(separated)
                     chunk.data.withUnsafeBufferPointer {
                         timeline.write(startFrame: chunk.startFrame, frames: chunk.frames, data: $0.baseAddress!)
                     }
@@ -984,10 +1020,21 @@ final class SeparationWorker: @unchecked Sendable {
                 if text != lastError { engineLog("live: model pass failed: \(text)") }
                 lastError = text
             }
-            let ms = Double(DispatchTime.now().uptimeNanoseconds - began) / 1e6
-            times.withLock { values in
-                values.append(ms)
-                if values.count > Self.timesKept { values.removeFirst(values.count - Self.timesKept) }
+            if skipped {
+                if silentSince == nil { silentSince = nextEdge }
+            } else {
+                let ms = Double(DispatchTime.now().uptimeNanoseconds - began) / 1e6
+                // The first pass after a long pause: the GPU may have cooled down (diagnostics of the resume).
+                if let since = silentSince, Double(nextEdge - since) / rate >= Self.longSilence {
+                    engineLog(String(format: "live: first pass after %.0f s of silence: %d ms",
+                                     Double(nextEdge - since) / rate, Int(ms)))
+                }
+                silentSince = nil
+                // Skipped passes stay out: they would lower the median that judges the model too slow.
+                times.withLock { values in
+                    values.append(ms)
+                    if values.count > Self.timesKept { values.removeFirst(values.count - Self.timesKept) }
+                }
             }
             nextEdge += hop
         }

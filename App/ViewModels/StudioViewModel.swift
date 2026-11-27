@@ -93,6 +93,8 @@ import UniformTypeIdentifiers
     @ObservationIgnored weak var controller: ModeController?
     @ObservationIgnored weak var panel: PanelHolding?
     @ObservationIgnored private let defaults: UserDefaults
+    /// Once real sound has come in, only zeros are a silent app, not a missing permission.
+    @ObservationIgnored private let capturePermission: CapturePermissionMemory
     @ObservationIgnored private var throttle = SendThrottle(interval: 1 / LiveViewModel.mixSendsPerSecond)
     /// The switches from before a solo, to put back when the stem is held again. Not saved across launches.
     @ObservationIgnored private var soloMemory = SoloMemory()
@@ -113,6 +115,7 @@ import UniformTypeIdentifiers
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        capturePermission = CapturePermissionMemory(defaults: defaults)
         level = StudioLevel.initial(stored: defaults.string(forKey: Self.levelKey))
         mix = .allOn(Stem.studio)
     }
@@ -507,6 +510,12 @@ import UniformTypeIdentifiers
             return
         }
         switch event {
+        case .recording(_, let peaks):
+            // The recording's peaks come from the tap; the player's levels below come from files.
+            capturePermission.heard(peaks: peaks)
+            send(session.handle(event, level: level))
+        case .permissionSuspected where capturePermission.confirmed:
+            break
         case .levels(let newLevels):
             levels = newLevels
         case .stemsReady:

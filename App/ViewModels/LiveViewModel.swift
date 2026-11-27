@@ -70,6 +70,8 @@ import StelixCore
 
     @ObservationIgnored weak var controller: ModeController?
     @ObservationIgnored private let defaults: UserDefaults
+    /// Once real sound has come in, only zeros are a silent app, not a missing permission.
+    @ObservationIgnored private let capturePermission: CapturePermissionMemory
     @ObservationIgnored private var throttle = SendThrottle(interval: 1 / LiveViewModel.mixSendsPerSecond)
     /// The switches from before a solo, to put back when the stem is held again. Not saved across launches.
     @ObservationIgnored private var soloMemory = SoloMemory()
@@ -77,6 +79,7 @@ import StelixCore
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        capturePermission = CapturePermissionMemory(defaults: defaults)
         level = LiveLevel.initial(stored: defaults.string(forKey: Self.levelKey))
         mix = Self.storedMix(defaults) ?? .allOn(Stem.live)
     }
@@ -177,9 +180,10 @@ import StelixCore
             stats = newStats
         case .levels(let newLevels):
             levels = newLevels
+            capturePermission.heard(levels: newLevels)
             if permissionSuspected, newLevels.values.contains(where: { $0 > 0 }) { permissionSuspected = false }
         case .permissionSuspected:
-            permissionSuspected = true
+            if !capturePermission.confirmed { permissionSuspected = true }
         case .measuredDelay(let seconds):
             measurement = .done(seconds: seconds)
         case .tempo(let bpm):
