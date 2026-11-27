@@ -1,8 +1,10 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (C) 2026 Gabriele Carsana. See the NOTICE file for the additional terms.
-# Builds a release DMG: release/Stelix.dmg (Stelix.app plus an Applications link). The file name has no
-# version, so https://github.com/stelix-app/stelix/releases/latest/download/Stelix.dmg always points to the latest.
+# Builds a release DMG: release/Stelix.dmg (Stelix.app, an Applications link and a window that says to
+# drag one onto the other: see scripts/make-dmg.sh), checked with scripts/check-dmg.sh.
+# The file name has no version, so
+# https://github.com/stelix-app/stelix/releases/latest/download/Stelix.dmg always points to the latest.
 # Usage: scripts/release.sh <version>    e.g. scripts/release.sh 1.0.0
 # Requires: CFBundleShortVersionString == <version> and a clean working tree.
 # Next to it, release/Stelix-<version>-lgpl-sources.tar.gz: the source of the LGPL libraries in the app.
@@ -38,16 +40,14 @@ WEIGHTS="$(find "$APP" \( -name '*.safetensors' -o -name '*.ckpt' -o -name '*.th
 [ -z "$WEIGHTS" ] || { echo "Error: model weights inside the app:" >&2; echo "$WEIGHTS" >&2; exit 1; }
 
 RELEASE="$ROOT/release"
-STAGING="$RELEASE/staging"
 DMG="$RELEASE/Stelix.dmg"
-rm -rf "$STAGING"
-mkdir -p "$STAGING"
-ditto "$APP" "$STAGING/Stelix.app"
-ln -s /Applications "$STAGING/Applications"
-
-hdiutil create -volname "Stelix $VERSION" -srcfolder "$STAGING" -format UDZO -ov "$DMG"
+mkdir -p "$RELEASE"
+"$ROOT/scripts/make-dmg.sh" "$APP" "Stelix $VERSION" "$DMG"
 hdiutil verify "$DMG"
-rm -rf "$STAGING"
+# The DMG as uploaded must pass the check every installed Stelix runs before opening an update.
+DESIGNATED="$(codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => //p')"
+[ -n "$DESIGNATED" ] || { echo "Error: no designated requirement for $APP" >&2; exit 77; }
+"$ROOT/scripts/check-dmg.sh" "$DMG" "$VERSION" "$DESIGNATED"
 
 BYTES="$(stat -f %z "$DMG")"
 LIMIT=$((2 * 1024 * 1024 * 1024))

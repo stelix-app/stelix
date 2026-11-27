@@ -12,6 +12,7 @@
 # The DMG lands in ~/Downloads: don't drag it to Applications, it is a test build.
 # STELIX_TEST_NOTES=<file.md> uses that file as the release body instead of the built-in sample.
 set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${1:?built Stelix.app}"
 OUT="${2:?output dir}"
 IDENTITY="${STELIX_SIGN_IDENTITY:-Stelix Local Signing}"
@@ -36,8 +37,8 @@ make_variant() { # dir identity
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $((build + 1))" "$plist"
   codesign --force --sign "$identity" --options runtime \
     --preserve-metadata=identifier,entitlements,flags "$dir/staging/$NAME.app"
-  ln -s /Applications "$dir/staging/Applications"
-  hdiutil create -quiet -volname "$NAME $NEW" -srcfolder "$dir/staging" -format UDZO -ov "$dir/$NAME-$NEW.dmg"
+  # The same image as a release: background, icon positions and volume icon included.
+  "$ROOT/scripts/make-dmg.sh" "$dir/staging/$NAME.app" "$NAME $NEW" "$dir/$NAME-$NEW.dmg" >/dev/null
   rm -rf "$dir/staging"
   local size sha
   size="$(stat -f %z "$dir/$NAME-$NEW.dmg")"

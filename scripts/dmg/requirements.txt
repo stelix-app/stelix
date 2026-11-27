@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Gabriele Carsana. See the NOTICE file for the additional terms.
+# dmgbuild and what it needs, for scripts/make-dmg.sh only: never part of the app.
+# Wheels only, pinned by hash. All three are MIT.
+dmgbuild==2.0.0 --hash=sha256:3d4f33f3a0def7ae2a43701a40aa6ae341f90445433694abd4bc67aab779d2f8
+ds-store==1.3.4 --hash=sha256:6d8ae662921846c96b03c244a92aab19a5b4fb3d9cada118fc83cace9250f049
+mac-alias==2.2.4 --hash=sha256:c20f95f75d7f966dd8ea2f84c317d4ff4abee0db9cc8a13b454891c15aa04226
