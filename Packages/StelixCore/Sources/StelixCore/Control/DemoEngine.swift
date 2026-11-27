@@ -15,6 +15,15 @@ public final class DemoEngine: EngineConnection {
     /// The scenario in progress, to answer `cancelJob` like the real engine.
     private let running = Mutex<Running?>(nil)
     private enum Running { case recording, separation }
+    /// The Studio player, faked like `StudioPlayer`: a tick every `statsInterval / 5` (50 ms by default)
+    /// with the levels (telemetry on) and, every other tick, the position.
+    private let playback = Mutex(Playback())
+    private struct Playback {
+        var task: Task<Void, Never>?
+        var position: Double = 0
+        var duration: Double = 10
+        var telemetry = false
+    }
     private let fillDuration: Duration
     private let statsInterval: Duration
 
@@ -60,19 +69,30 @@ public final class DemoEngine: EngineConnection {
             case nil: break
             }
         case .player(let player):
-            let playing: Bool
             switch player {
-            case .play: playing = true
-            case .pause, .seek: playing = false
+            case .play: play()
+            case .pause: stopPlaying()
+            case .seek(let seconds):
+                let playing = playback.withLock { state -> Bool in
+                    state.position = min(max(seconds, 0), state.duration)
+                    return state.task != nil
+                }
+                if playing { play() } else { emitPlayer(playing: false) }
             }
-            continuation.yield(.player(position: 0, duration: 10, playing: playing))
         case .debugMeasureDelay:
             continuation.yield(.measuredDelay(seconds: 0.98))
         case .shutdown:
             finish()
         case .loadStems(let result, let position):
-            continuation.yield(.player(position: position, duration: result.duration, playing: false))
-        case .setLiveLevel, .setMix, .setTelemetry, .clearStudio, .setTranspose, .scanKeys:
+            stopPlaying(emit: false)
+            playback.withLock {
+                $0.position = position
+                $0.duration = result.duration
+            }
+            emitPlayer(playing: false)
+        case .setTelemetry(let on):
+            playback.withLock { $0.telemetry = on }
+        case .setLiveLevel, .setMix, .clearStudio, .setTranspose, .scanKeys:
             break
         }
     }
@@ -129,11 +149,62 @@ public final class DemoEngine: EngineConnection {
             (stem, (0..<600).map { i in Float(0.5 + 0.4 * sin(Double(i) / Double(12 + index * 5))) })
         })
         running.withLock { $0 = nil }
+        stopPlaying(emit: false)
+        playback.withLock {
+            $0.position = 0
+            $0.duration = 10
+        }
         continuation.yield(.stemsReady(StemsResult(
             folder: folder,
             files: Dictionary(uniqueKeysWithValues: Stem.studio.map { ($0, $0.fileName) }),
             duration: 10,
             waveforms: waveforms)))
+    }
+
+    // MARK: - Studio player
+
+    private func play() {
+        guard !finished.withLock({ $0 }) else { return }
+        let tick = statsInterval / 5
+        let task = Task { [self] in
+            var ticks = 0
+            while await pause(tick) {
+                ticks += 1
+                let (position, duration, telemetry) = playback.withLock { state in
+                    state.position = min(state.position + tick / .seconds(1), state.duration)
+                    return (state.position, state.duration, state.telemetry)
+                }
+                if position >= duration {
+                    // End of the track, as in `StudioPlayer`: stopped there.
+                    stopPlaying()
+                    return
+                }
+                if telemetry {
+                    continuation.yield(.levels(Dictionary(uniqueKeysWithValues: Stem.studio.enumerated().map { i, stem in
+                        (stem, Float(0.4 + 0.3 * sin(position * 4 + Double(i))))
+                    })))
+                }
+                if ticks % 2 == 0 { emitPlayer(playing: true) }
+            }
+        }
+        playback.withLock { state in
+            state.task?.cancel()
+            state.task = task
+        }
+        emitPlayer(playing: true)
+    }
+
+    private func stopPlaying(emit: Bool = true) {
+        playback.withLock { state in
+            state.task?.cancel()
+            state.task = nil
+        }
+        if emit { emitPlayer(playing: false) }
+    }
+
+    private func emitPlayer(playing: Bool) {
+        let (position, duration) = playback.withLock { ($0.position, $0.duration) }
+        continuation.yield(.player(position: position, duration: duration, playing: playing))
     }
 
     // MARK: - Support
@@ -160,6 +231,7 @@ public final class DemoEngine: EngineConnection {
         }
         guard first else { return }
         driver.withLock { $0?.cancel(); $0 = nil }
+        playback.withLock { $0.task?.cancel(); $0.task = nil }
         continuation.finish()
     }
 }

@@ -73,6 +73,37 @@ struct DemoEngineTests {
         #expect(recorded)
     }
 
+    /// Like `StudioPlayer`: while it plays, the position goes forward and, with telemetry, the six levels arrive.
+    @Test func studioPlayTicksLikeThePlayerUntilPause() async throws {
+        let engine = DemoEngine(statsInterval: .milliseconds(10))
+        try await engine.start()
+        // Without ticks the loops below would wait forever: after 2 s the stream ends and the test fails.
+        let watchdog = Task {
+            try await Task.sleep(for: .seconds(2))
+            await engine.terminate()
+        }
+        defer { watchdog.cancel() }
+        engine.send(.setTelemetry(true))
+        engine.send(.player(.play))
+        var positions: [Double] = []
+        var levels: [Stem: Float]?
+        for await event in engine.events {
+            if case .player(let position, _, true) = event { positions.append(position) }
+            if case .levels(let l) = event { levels = l }
+            if positions.count >= 3, levels != nil { break }
+        }
+        engine.send(.player(.pause))
+        var paused = false
+        for await event in engine.events {
+            if case .player(_, _, false) = event { paused = true; break }
+        }
+        await engine.terminate()
+        #expect(positions == positions.sorted())
+        #expect((positions.last ?? 0) > (positions.first ?? 0))
+        #expect(Set(levels?.keys ?? [:].keys) == Set(Stem.studio))
+        #expect(paused)
+    }
+
     @Test func terminateEndsStreamAndIsIdempotent() async throws {
         let engine = DemoEngine()
         try await engine.start()

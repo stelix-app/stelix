@@ -205,30 +205,7 @@ struct StudioView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: Tokens.spaceS)
-            Menu {
-                Button { studio.record() } label: {
-                    Label(Copy.studioNewRecording, systemImage: "record.circle")
-                }
-                Button { studio.chooseFile() } label: {
-                    Label(Copy.studioChooseFile, systemImage: "folder")
-                }
-                Divider()
-                Menu {
-                    ForEach(StudioLevel.allCases.filter { $0 != studio.session.stemsLevel }, id: \.self) { level in
-                        Button { changeModel(to: level) } label: {
-                            Text(Copy.name(level))
-                        }
-                    }
-                } label: {
-                    Label(Copy.studioChangeModel, systemImage: "arrow.triangle.2.circlepath")
-                }
-            } label: {
-                Image(systemName: "ellipsis")
-            }
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .accessibilityLabel(Copy.studioMore)
-            .disabled(!studio.canStart)
+            StudioMoreMenu(studio: studio)
         }
     }
 
@@ -242,11 +219,6 @@ struct StudioView: View {
         case .file(let path): URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
         case .recording, nil: Copy.studioRecordingName
         }
-    }
-
-    private func changeModel(to level: StudioLevel) {
-        studio.beginModelChange()
-        studio.choose(level)
     }
 
     private func stems(_ result: StemsResult) -> some View {
@@ -333,6 +305,46 @@ struct StudioView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+/// The "⋯" menu of the stems row: new recording, another file, Change Model.
+/// A view of its own so that it is not rebuilt with `StudioView`, which during playback updates
+/// at every tick of the player: with the menu open, SwiftUI built its items again each time
+/// and the Change Model submenu never opened under the pointer.
+private struct StudioMoreMenu: View {
+    let studio: StudioViewModel
+
+    var body: some View {
+        Menu {
+            Button { studio.record() } label: {
+                Label(Copy.studioNewRecording, systemImage: "record.circle")
+            }
+            Button { studio.chooseFile() } label: {
+                Label(Copy.studioChooseFile, systemImage: "folder")
+            }
+            Divider()
+            Menu {
+                ForEach(StudioLevel.allCases.filter { $0 != studio.session.stemsLevel }, id: \.self) { level in
+                    Button { changeModel(to: level) } label: {
+                        Text(Copy.name(level))
+                    }
+                }
+            } label: {
+                Label(Copy.studioChangeModel, systemImage: "arrow.triangle.2.circlepath")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+        }
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel(Copy.studioMore)
+        .disabled(!studio.canStart)
+    }
+
+    private func changeModel(to level: StudioLevel) {
+        studio.beginModelChange()
+        studio.choose(level)
     }
 }
 
