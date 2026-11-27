@@ -12,14 +12,15 @@ import StelixCore
 ///   saves the content as PNG and exits.
 /// - `--no-models`: the models folder is an empty temporary one, as on a Mac that never
 ///   downloaded them (snapshots of the banner).
-/// - `--show <settings|about|notice|settings-all|update|update-notice>`: in a snapshot, opens
-///   Settings, About, the download notice of the mode's level, Settings with the notice of
-///   Download All, or the update banner (closed or open) for a made-up newer version.
+/// - `--show <settings|about|notice|settings-all|update>`: in a snapshot, opens Settings, About,
+///   the download notice of the mode's level, Settings with the notice of Download All, or
+///   Settings with "Stelix X available" for a made-up newer version (the update window is a window
+///   of its own: it is looked at live, with `scripts/update-test-feed.sh`).
 /// - `--update-feed <url>`: asks this address instead of the repository's latest release, for the
 ///   local test of updates (http://127.0.0.1 allowed). The signature check stays.
 struct LaunchOptions {
     enum Show: String {
-        case settings, about, notice, settingsAll = "settings-all", update, updateNotice = "update-notice"
+        case settings, about, notice, settingsAll = "settings-all", update
     }
 
     var demoEngine = false
@@ -72,6 +73,7 @@ struct LaunchOptions {
     private let models: ModelsModel
     private let updates: UpdateCenter?
     private var updateTimer: Timer?
+    private var updateWindow: UpdateWindowController?
     private let settings = SettingsModel()
     private let panel: PanelController
     private var statusItem: StatusItemController?
@@ -238,6 +240,10 @@ struct LaunchOptions {
         }
         statusItem = StatusItemController(panel: panel, controller: modeController, live: live, studio: studio,
                                           library: models.library, updates: updates)
+        if options.snapshot == nil, let updates {
+            updateWindow = UpdateWindowController(updates: updates)
+            updates.present = { [weak self] how in self?.presentUpdate(how) }
+        }
         if ownsScratch, let updates { startUpdateChecks(updates) }
         installSigterm()
         if ownsScratch {
@@ -265,6 +271,16 @@ struct LaunchOptions {
             statusItem?.open()
             if options.show == .notice { models.library.requestDownload(ModelID.allCases) }
         }
+    }
+
+    /// The update window: by itself without taking the keyboard; from Settings (or Check Now) in
+    /// front, with the panel closed (a click on the window would close it anyway). A Check Now
+    /// that answers after the panel was closed opens it like an automatic one: the user may be
+    /// typing elsewhere by then.
+    private func presentUpdate(_ how: UpdateCenter.Presentation) {
+        let activate = how == .requested && panel.isVisible
+        if activate { panel.hide() }
+        updateWindow?.show(activating: activate)
     }
 
     /// At launch and then every hour, a look at whether a day has passed since the last check
@@ -331,12 +347,9 @@ struct LaunchOptions {
         case .settingsAll:
             settings.open()
             models.library.requestDownload(ModelID.allCases)
-        case .update, .updateNotice:
-            let show = options.show
-            Task { [updates] in
-                await updates?.checkNow()
-                if show == .updateNotice { updates?.showDetails() }
-            }
+        case .update:
+            settings.open()
+            Task { [updates] in await updates?.checkNow() }
         case .notice:
             switch mode {
             case .original: models.library.requestDownload(ModelID.allCases)

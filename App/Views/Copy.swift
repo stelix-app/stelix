@@ -546,19 +546,17 @@ enum Copy {
         }
     }
 
-    // MARK: - Updates (Task 10.11)
+    // MARK: - Updates (Task 10.11, window in 1.1.0)
 
     static func updateAvailable(_ version: String) -> String {
-        String(localized: "update.available", defaultValue: "Stelix \(version) is available.")
+        String(localized: "update.available", defaultValue: "Stelix \(version) is available")
     }
-    static func updateTitle(_ version: String) -> String { "\(appName) \(version)" }
-    static func updatePublished(_ date: String, current: String) -> String {
-        String(localized: "update.published", defaultValue: "Released on \(date). You have \(current).")
+    static func updateSubtitle(_ date: String, size: String) -> String {
+        String(localized: "update.subtitle", defaultValue: "Released on \(date) · \(size)")
     }
-    static func updateCurrent(_ current: String) -> String {
-        String(localized: "update.current", defaultValue: "You have \(current).")
+    static var updateFullNotes: String {
+        String(localized: "update.fullNotes", defaultValue: "Full Release Notes on GitHub")
     }
-    static var updateNotes: String { String(localized: "update.notes", defaultValue: "What's New in This Version") }
     static var updateSource: String {
         String(localized: "update.source", defaultValue: "From GitHub. Your models, settings and audio permission stay.")
     }

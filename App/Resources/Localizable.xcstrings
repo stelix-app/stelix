@@ -3441,30 +3441,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Stelix %@ is available."
+            "value": "Stelix %@ is available"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "È disponibile Stelix %@."
-          }
-        }
-      }
-    },
-    "update.current": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "You have %@."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ora hai la %@."
+            "value": "È disponibile Stelix %@"
           }
         }
       }
@@ -3520,6 +3503,23 @@
         }
       }
     },
+    "update.fullNotes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full Release Notes on GitHub"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Note complete su GitHub"
+          }
+        }
+      }
+    },
     "update.later": {
       "extractionState": "manual",
       "localizations": {
@@ -3533,40 +3533,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Più tardi"
-          }
-        }
-      }
-    },
-    "update.notes": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "What's New in This Version"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Novità di questa versione"
-          }
-        }
-      }
-    },
-    "update.published": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Released on %@. You have %@."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pubblicata il %@. Ora hai la %@."
           }
         }
       }
@@ -3652,6 +3618,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Si scarica da GitHub. Modelli, preferenze e permesso audio restano."
+          }
+        }
+      }
+    },
+    "update.subtitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Released on %@ · %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pubblicata il %@ · %@"
           }
         }
       }

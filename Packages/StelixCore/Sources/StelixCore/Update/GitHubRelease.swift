@@ -20,6 +20,8 @@ public struct AvailableUpdate: Equatable, Sendable {
     public let notesURL: URL
     public let published: Date?
     public let dmg: DiskImage
+    /// What's new, from the release's `body`: nil when it has nothing to show.
+    public let notes: ReleaseNotes?
 }
 
 public enum GitHubRelease {
@@ -46,6 +48,7 @@ public enum GitHubRelease {
         let prerelease: Bool?
         let htmlUrl: String
         let publishedAt: String?
+        let body: String?
         let assets: [Asset]
     }
 
@@ -84,7 +87,8 @@ public enum GitHubRelease {
         let published = release.publishedAt.flatMap { ISO8601DateFormatter().date(from: $0) }
         return AvailableUpdate(
             version: version, notesURL: notes, published: published,
-            dmg: .init(name: asset.name, url: url, size: asset.size, sha256: sha256))
+            dmg: .init(name: asset.name, url: url, size: asset.size, sha256: sha256),
+            notes: release.body.flatMap(ReleaseNotes.init(body:)))
     }
 
     /// "sha256:<64 hex>" → the hex, lowercase.

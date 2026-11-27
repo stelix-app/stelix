@@ -39,6 +39,7 @@ struct GitHubReleaseTests {
     static func json(
         tag: String = "v1.1", draft: Bool = false, prerelease: Bool = false,
         html: String = "https://github.com/someone/Stelix/releases/tag/v1.1",
+        body: Any? = "Notes",
         assets: [(name: String, url: String, size: Int, digest: String?)] = [
             ("Stelix-1.1.dmg", "https://github.com/someone/Stelix/releases/download/v1.1/Stelix-1.1.dmg", 40_000_000,
              "sha256:" + digest),
@@ -51,10 +52,11 @@ struct GitHubReleaseTests {
             entry["digest"] = asset.digest ?? NSNull()
             return entry
         }
-        let object: [String: Any] = [
+        var object: [String: Any] = [
             "tag_name": tag, "name": "Stelix \(tag)", "draft": draft, "prerelease": prerelease,
-            "html_url": html, "published_at": "2026-12-02T10:30:00Z", "body": "Notes", "assets": list,
+            "html_url": html, "published_at": "2026-12-02T10:30:00Z", "assets": list,
         ]
+        object["body"] = body
         return try! JSONSerialization.data(withJSONObject: object)
     }
 
@@ -77,6 +79,20 @@ struct GitHubReleaseTests {
         #expect(release.dmg.sha256 == Self.digest)
         #expect(release.dmg.url.absoluteString.hasSuffix("/Stelix-1.1.dmg"))
         #expect(release.published == ISO8601DateFormatter().date(from: "2026-12-02T10:30:00Z"))
+    }
+
+    @Test func readsTheNotesFromTheBody() throws {
+        let body = "Adds.\n\n<details><summary>Italiano</summary>\n\nAggiunge.\n</details>"
+        let release = try #require(try GitHubRelease.parse(Self.json(body: body)))
+        #expect(release.notes?.blocks(for: "it") == [.paragraph("Aggiunge.")])
+        #expect(release.notes?.blocks(for: "en") == [.paragraph("Adds.")])
+    }
+
+    @Test func noBodyNoNotes() throws {
+        for body in [nil, NSNull(), ""] as [Any?] {
+            let release = try #require(try GitHubRelease.parse(Self.json(body: body)), "\(String(describing: body))")
+            #expect(release.notes == nil, "\(String(describing: body))")
+        }
     }
 
     @Test func aDMGWithoutDigestIsStillReadable() throws {

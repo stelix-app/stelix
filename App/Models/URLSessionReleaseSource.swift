@@ -60,7 +60,7 @@ private final class RedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
 }
 
 /// For `--snapshot … --show update`: a made-up release one minor version above this one, so the
-/// banner can be photographed without network or a public repository.
+/// line in Settings can be photographed without network or a public repository.
 struct SnapshotReleaseSource: ReleaseSource {
     let current: AppVersion
 

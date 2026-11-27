@@ -10,6 +10,7 @@
 #   python3 -m http.server 8765 --bind 127.0.0.1 --directory <output dir>
 #   open <Stelix.app> --args --update-feed http://127.0.0.1:8765/good/latest.json --open-panel original
 # The DMG lands in ~/Downloads: don't drag it to Applications, it is a test build.
+# STELIX_TEST_NOTES=<file.md> uses that file as the release body instead of the built-in sample.
 set -euo pipefail
 APP="${1:?built Stelix.app}"
 OUT="${2:?output dir}"
@@ -41,13 +42,44 @@ make_variant() { # dir identity
   local size sha
   size="$(stat -f %z "$dir/$NAME-$NEW.dmg")"
   sha="$(shasum -a 256 "$dir/$NAME-$NEW.dmg" | cut -d' ' -f1)"
-  cat > "$dir/latest.json" <<JSON
-{"tag_name": "$NEW", "name": "$NEW", "draft": false, "prerelease": false,
- "html_url": "http://127.0.0.1:$PORT/$name/notes.html",
- "published_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
- "assets": [{"name": "$NAME-$NEW.dmg", "size": $size, "digest": "sha256:$sha",
-             "browser_download_url": "http://127.0.0.1:$PORT/$name/$NAME-$NEW.dmg"}]}
-JSON
+  # The body as a release written like docs/release-notes-*.md: English up to the first heading,
+  # Italian in the collapsed section at the bottom. The link must show as plain text.
+  local body
+  body="$(cat <<MD
+$NAME $NEW is a local test of the update window.
+
+- **Transpose**: move Live and Studio up or down by up to 12 semitones. See [the README](https://example.com).
+- **Key**: Live and Studio show the key next to the BPM, and it follows the transpose.
+- **Fixes**: the drums stay in time in Studio, and Save keeps the audio as it was.
+- **Long line**: this line is long on purpose, to see how the window wraps a sentence that does not fit on one line.
+
+## Requirements
+
+- A Mac with Apple silicon.
+
+<details>
+<summary>Italiano</summary>
+
+$NAME $NEW è una prova locale della finestra di aggiornamento.
+
+- **Trasponi**: sposta Live e Studio in su o in giù fino a 12 semitoni. Vedi [il README](https://example.com).
+- **Tonalità**: Live e Studio mostrano la tonalità accanto ai BPM, e segue il transpose.
+- **Correzioni**: nello Studio la batteria resta a tempo, e il Salva tiene l'audio com'era.
+- **Riga lunga**: questa riga è lunga apposta, per vedere come la finestra manda a capo una frase che non sta su una riga.
+
+</details>
+MD
+)"
+  if [ -n "${STELIX_TEST_NOTES:-}" ]; then body="$(cat "$STELIX_TEST_NOTES")"; fi
+  python3 -I -c 'import json, sys
+tag, port, name, app, size, sha, published, body = sys.argv[1:]
+print(json.dumps({
+    "tag_name": tag, "name": tag, "draft": False, "prerelease": False,
+    "html_url": f"http://127.0.0.1:{port}/{name}/notes.html", "published_at": published, "body": body,
+    "assets": [{"name": f"{app}-{tag}.dmg", "size": int(size), "digest": "sha256:" + sha,
+                "browser_download_url": f"http://127.0.0.1:{port}/{name}/{app}-{tag}.dmg"}],
+}, indent=1))' "$NEW" "$PORT" "$name" "$NAME" "$size" "$sha" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$body" \
+    > "$dir/latest.json"
   echo "<h1>$NAME $NEW ($name)</h1><p>Release notes of the local test.</p>" > "$dir/notes.html"
   echo "$name: $NAME $NEW, $size bytes, sha256 $sha"
 }

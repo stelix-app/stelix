@@ -170,7 +170,7 @@ import Testing
         try? await Task.sleep(for: .milliseconds(20))
         source.hold.withLock { $0 = false }
         await manual.value
-        // `--show updateNotice` opens the details right after Check Now.
+        // Check Now's answer is the automatic check's: the version is there when it returns.
         #expect(center.available?.version == AppVersion("1.1"))
         await automatic.value
     }
@@ -202,7 +202,6 @@ import Testing
         source.set(Self.release("v1.1.1"))
         await center.checkNow()
         #expect(center.available?.version == AppVersion("1.1.1"))
-        #expect(center.showsBanner)
         #expect(center.showsDot)
         #expect(center.stage == .offer)
         #expect(center.check == .idle)
@@ -245,9 +244,7 @@ import Testing
         source.set(Self.release("v1.1"))
         let center = make()
         await center.checkNow()
-        center.showDetails()
         center.skip()
-        #expect(!center.showsBanner)
         #expect(!center.showsDot)
         #expect(center.stage == .offer)
         // Remembered across launches, and long after.
@@ -256,11 +253,10 @@ import Testing
         clock.now += 30 * 24 * 3600
         await again.checkIfDue()
         #expect(again.available != nil)
-        #expect(!again.showsBanner)
+        #expect(!again.showsDot)
         source.set(Self.release("v1.2"))
         clock.now += 25 * 3600
         await again.checkIfDue()
-        #expect(again.showsBanner)
         #expect(again.showsDot)
     }
 
@@ -269,26 +265,24 @@ import Testing
         let center = make()
         await center.checkNow()
         center.later()
-        #expect(!center.showsBanner)
         #expect(!center.showsDot)
         // A day and more: the daily check finds the same version, still put off.
         clock.now += 47 * 3600
         await center.checkIfDue()
-        #expect(!center.showsBanner)
+        #expect(!center.showsDot)
         // Remembered across launches, Check Now included.
         let again = make()
         await again.checkNow()
-        #expect(!again.showsBanner)
+        #expect(!again.showsDot)
         again.later()
         clock.now += Self.twoDays - 60
         await again.checkIfDue()
-        #expect(!again.showsBanner)
+        #expect(!again.showsDot)
         // Two days after this press: the hourly call brings it back, without asking GitHub
         // (the last answer is a minute old).
         let calls = source.calls.withLock { $0 }
         clock.now += 120
         await again.checkIfDue()
-        #expect(again.showsBanner)
         #expect(again.showsDot)
         #expect(source.calls.withLock { $0 } == calls)
     }
@@ -300,11 +294,11 @@ import Testing
         center.later()
         clock.now += Self.twoDays + 60
         await center.checkIfDue()
-        #expect(center.showsBanner)
+        #expect(center.showsDot)
         center.later()
         clock.now += Self.twoDays - 60
         await center.checkIfDue()
-        #expect(!center.showsBanner)
+        #expect(!center.showsDot)
     }
 
     @Test func laterDoesNotHideANewerVersion() async {
@@ -315,24 +309,8 @@ import Testing
         source.set(Self.release("v1.2"))
         clock.now += 25 * 3600
         await center.checkIfDue()
-        #expect(center.showsBanner)
+        #expect(center.showsDot)
         #expect(center.available?.version == AppVersion("1.2"))
-    }
-
-    @Test func settingsShowsAPutOffVersionOnlyAfterAClick() async {
-        source.set(Self.release("v1.1"))
-        let center = make()
-        await center.checkNow()
-        #expect(!center.showsSettingsBox)
-        center.skip()
-        center.showDetails()
-        #expect(center.showsSettingsBox)
-        #expect(!center.showsBanner, "still skipped in the sections")
-        #expect(center.putOff)
-        #expect(make().isPutOff(AppVersion("1.1")!))
-        // Settings closed and opened again: folded.
-        center.fold()
-        #expect(!center.showsSettingsBox)
     }
 
     @Test func checkNowLeavesAPutOffVersionPutOff() async {
@@ -341,7 +319,7 @@ import Testing
         await center.checkNow()
         center.skip()
         await center.checkNow()
-        #expect(!center.showsBanner)
+        #expect(!center.showsDot)
         #expect(center.available?.version == AppVersion("1.1"))
     }
 
@@ -350,43 +328,180 @@ import Testing
         let center = make()
         await center.checkNow()
         center.skip()
-        center.showDetails()
         for (tag, size) in [("v1.2", 5_000), ("v1.3", 6_000)] {
             source.set(Self.release(tag, size: size))
             clock.now += 25 * 3600
             await center.checkIfDue()
             #expect(center.available?.version == AppVersion(tag))
             #expect(center.available?.dmg.size == Int64(size), "the size GitHub gives for this file")
-            #expect(center.showsBanner)
             #expect(center.showsDot)
         }
         #expect(center.stage == .offer)
     }
 
-    @Test func aDownloadFromSettingsShowsInTheSectionsToo() async {
-        source.set(Self.release("v1.1"))
-        let center = make()
-        await center.checkNow()
-        center.skip()
-        center.showDetails()
-        fetcher.hang.withLock { $0 = true }
-        center.confirmDownload()
-        center.fold()
-        #expect(center.showsBanner)
-        #expect(center.showsSettingsBox)
-        center.cancelDownload()
-        #expect(!center.showsBanner)
+    // MARK: - Window
+
+    /// What `present` was asked, in order.
+    final class Presented {
+        var calls: [UpdateCenter.Presentation] = []
     }
 
-    @Test func aFailureIsForgottenWhenSettingsFold() async {
+    func watched(_ center: UpdateCenter) -> Presented {
+        let presented = Presented()
+        center.present = { presented.calls.append($0) }
+        return presented
+    }
+
+    @Test func aNewVersionOpensTheWindowOnce() async {
+        source.set(Self.release("v1.1"))
+        let center = make()
+        let presented = watched(center)
+        await center.checkIfDue()
+        #expect(presented.calls == [.automatic])
+        clock.now += 25 * 3600
+        await center.checkIfDue()
+        #expect(source.calls.withLock { $0 } == 2)
+        #expect(presented.calls == [.automatic], "the same version, still on screen or closed by hand")
+    }
+
+    @Test func nothingNewOpensNothing() async {
+        source.set(Self.release("v1.0"))
+        let center = make()
+        let presented = watched(center)
+        await center.checkIfDue()
+        await center.checkNow()
+        #expect(presented.calls == [])
+    }
+
+    @Test func aPutOffVersionDoesNotOpenIt() async {
+        source.set(Self.release("v1.1"))
+        let first = make()
+        await first.checkIfDue()
+        first.skip()
+        clock.now += 25 * 3600
+        let center = make()
+        let presented = watched(center)
+        await center.checkIfDue()
+        #expect(center.available?.version == AppVersion("1.1"))
+        #expect(presented.calls == [])
+    }
+
+    /// The hourly call after Later's two days: once, not every hour after.
+    @Test func laterReopensOnceWhenTheTwoDaysEnd() async {
+        source.set(Self.release("v1.1"))
+        let center = make()
+        let presented = watched(center)
+        await center.checkIfDue()
+        center.later()
+        clock.now += Self.twoDays + 60
+        for _ in 0..<3 {
+            await center.checkIfDue()
+            clock.now += 3600
+        }
+        #expect(presented.calls == [.automatic, .automatic])
+    }
+
+    @Test func aNewerVersionOpensItAgain() async {
+        source.set(Self.release("v1.1"))
+        let center = make()
+        let presented = watched(center)
+        await center.checkIfDue()
+        source.set(Self.release("v1.2"))
+        clock.now += 25 * 3600
+        await center.checkIfDue()
+        #expect(presented.calls == [.automatic, .automatic])
+        #expect(center.available?.version == AppVersion("1.2"))
+    }
+
+    @Test func checkNowOpensItAsRequested() async {
+        source.set(Self.release("v1.1"))
+        let center = make()
+        let presented = watched(center)
+        await center.checkNow()
+        await center.checkNow()
+        #expect(presented.calls == [.requested, .requested])
+        center.skip()
+        await center.checkNow()
+        #expect(presented.calls == [.requested, .requested], "skipped: only the line in Settings")
+    }
+
+    @Test func openWindowWorksEvenWhenPutOff() async {
+        source.set(Self.release("v1.1"))
+        let center = make()
+        let presented = watched(center)
+        await center.checkIfDue()
+        center.skip()
+        center.openWindow()
+        #expect(presented.calls == [.automatic, .requested])
+        #expect(center.putOff)
+        #expect(make().isPutOff(AppVersion("1.1")!))
+    }
+
+    @Test func openWindowWithoutAVersionDoesNothing() {
+        let center = make()
+        let presented = watched(center)
+        center.openWindow()
+        #expect(presented.calls == [])
+    }
+
+    @Test func closingIsLater() async {
+        source.set(Self.release("v1.1"))
+        let center = make()
+        let presented = watched(center)
+        await center.checkIfDue()
+        center.windowClosed()
+        #expect(center.putOff)
+        #expect(!center.showsDot)
+        clock.now += Self.twoDays + 60
+        await center.checkIfDue()
+        #expect(center.showsDot)
+        #expect(presented.calls == [.automatic, .automatic])
+    }
+
+    @Test func closingDuringADownloadLeavesIt() async {
+        let center = await offered()
+        let presented = watched(center)
+        fetcher.hang.withLock { $0 = true }
+        center.confirmDownload()
+        center.windowClosed()
+        #expect(center.stage == .downloading(fraction: 0))
+        #expect(!center.putOff)
+        center.openWindow()
+        #expect(presented.calls == [.requested])
+        center.cancelDownload()
+    }
+
+    @Test func closingWithTheDMGReadyLeavesIt() async {
+        let center = await offered()
+        center.confirmDownload()
+        await finish(center)
+        center.windowClosed()
+        #expect(center.stage == .ready(downloads.appending(path: "Stelix-1.1.dmg")))
+        #expect(!center.putOff)
+    }
+
+    @Test func closingAfterAFailureForgetsIt() async {
         fetcher.failure.withLock { $0 = ModelFetchError.network }
         let center = await offered()
         center.confirmDownload()
         await finish(center)
         #expect(center.stage == .failed(.network))
-        center.fold()
+        center.windowClosed()
         #expect(center.stage == .offer)
-        #expect(!center.expanded)
+        #expect(center.putOff)
+    }
+
+    @Test func noWindowDuringADownload() async {
+        let center = await offered()
+        let presented = watched(center)
+        fetcher.hang.withLock { $0 = true }
+        center.confirmDownload()
+        source.set(Self.release("v1.2"))
+        clock.now += 25 * 3600
+        await center.checkIfDue()
+        #expect(presented.calls == [])
+        #expect(center.available?.version == AppVersion("1.1"))
+        center.cancelDownload()
     }
 
     // MARK: - Download
@@ -395,8 +510,6 @@ import Testing
         source.set(Self.release(tag, digest: digest))
         let center = make()
         await center.checkNow()
-        center.showDetails()
-        #expect(center.expanded)
         return center
     }
 
@@ -409,12 +522,11 @@ import Testing
         }
     }
 
-    @Test func laterAndSkipFoldTheDetails() async {
+    @Test func laterAndSkipResetTheStage() async {
         let center = await offered()
         center.later()
-        #expect(!center.expanded)
         #expect(center.stage == .offer)
-        #expect(!center.showsBanner)
+        #expect(!center.showsDot)
     }
 
     @Test func aVerifiedDownloadLandsInDownloads() async {
@@ -483,7 +595,6 @@ import Testing
         let center = UpdateCenter(current: AppVersion("1.0")!, source: source, fetcher: fetcher, verifier: nil,
                                   defaults: defaults, downloads: downloads, work: work, now: { [clock] in clock.now })
         await center.checkNow()
-        center.showDetails()
         center.confirmDownload()
         await finish(center)
         #expect(center.stage == .failed(.verification))
@@ -567,7 +678,6 @@ import Testing
         source.set(Self.release("v1.1").replacing(Data("Stelix-v1.1.dmg".utf8), with: Data("../../evil.dmg".utf8)))
         let center = make()
         await center.checkNow()
-        center.showDetails()
         center.confirmDownload()
         await finish(center)
         #expect(center.stage == .ready(downloads.appending(path: "Stelix-1.1.dmg")))

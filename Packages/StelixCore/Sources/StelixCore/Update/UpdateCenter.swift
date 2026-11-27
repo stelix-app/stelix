@@ -11,9 +11,10 @@ public protocol ReleaseSource: Sendable {
 }
 
 /// "Update available": at most one look a day at the repository's latest release (or now, with
-/// Check Now), the banner while there's a newer version, and its download. Two places show it:
-/// the sections (Original, Live, Studio), where Later and Skip This Version can put it off, and
-/// Settings, where "Stelix 1.1 available" opens the details whatever was put off. The DMG arrives in a
+/// Check Now), the update window while there's a newer version, and its download. The window opens
+/// by itself once for each version found (`present`), and again when Later's two days are over;
+/// Later, Skip This Version or its close button put it off. "Stelix 1.1 available" in Settings
+/// opens it whatever was put off. The DMG arrives in a
 /// work folder, must match GitHub's digest when there is one and pass `DiskImageVerifying` (same
 /// certificate, same version), and only then moves to Downloads, where the user opens it and drags
 /// the app to Applications. Stelix never replaces itself.
@@ -34,7 +35,7 @@ public protocol ReleaseSource: Sendable {
     }
 
     public enum Stage: Equatable, Sendable {
-        /// Nothing under way: the one-line banner, or the details if `expanded`.
+        /// Nothing under way: the notes, Skip This Version, Later and Download.
         case offer
         case downloading(fraction: Double)
         /// Digest and signature.
@@ -47,6 +48,12 @@ public protocol ReleaseSource: Sendable {
     /// The outcome of Check Now, for the line in Settings. Automatic checks leave it alone.
     public enum Check: Equatable, Sendable {
         case idle, checking, upToDate, failed
+    }
+
+    /// How the window opens: by itself without taking the keyboard from the app in use, or after a
+    /// click in Settings (or Check Now), in front and active.
+    public enum Presentation: Equatable, Sendable {
+        case automatic, requested
     }
 
     public static let interval: TimeInterval = 24 * 3600
@@ -62,22 +69,18 @@ public protocol ReleaseSource: Sendable {
     public private(set) var available: AvailableUpdate?
     public private(set) var stage: Stage = .offer
     public private(set) var check: Check = .idle
-    /// Later (for two days) or Skip This Version on the available version: hidden in the sections.
+    /// Later (for two days), Skip This Version or the close button on the available version: the
+    /// window does not open by itself and the menu bar icon has no dot.
     public private(set) var putOff = false
-    /// The details (version, date, size, notes link, Download) instead of the one line: after
-    /// Download… in the banner or the line in Settings. Settings opening or closing folds them.
-    public private(set) var expanded = false
+
+    /// Opens the update window. Set by the app.
+    @ObservationIgnored public var present: ((Presentation) -> Void)?
 
     /// The toggle in Settings. On by default.
     public var automatic: Bool {
         didSet { defaults.set(automatic, forKey: Self.automaticKey) }
     }
 
-    /// The banner in the sections: a newer version, unless Later or Skip This Version put it off.
-    /// A download started anyway (from Settings) shows there too.
-    public var showsBanner: Bool { available != nil && !(putOff && stage == .offer) }
-    /// The box in Settings: only after its line was clicked, or while a download runs.
-    public var showsSettingsBox: Bool { available != nil && (expanded || busy) }
     /// The dot on the menu bar icon: a newer version the user hasn't put off.
     public var showsDot: Bool { available != nil && !putOff }
 
@@ -98,6 +101,9 @@ public protocol ReleaseSource: Sendable {
     @ObservationIgnored private var task: Task<Void, Never>?
     /// Bumped by every download and every Cancel: what an older one reports is ignored.
     @ObservationIgnored private var generation = 0
+    /// The version the window last opened for by itself: the daily check finding it again leaves
+    /// the window alone. Putting it off forgets it, so it opens again when Later is over.
+    @ObservationIgnored private var announced: AppVersion?
 
     public init(current: AppVersion, source: any ReleaseSource, fetcher: any ModelFetcher,
                 verifier: (any DiskImageVerifying)?, defaults: UserDefaults, downloads: URL, work: URL,
@@ -128,6 +134,7 @@ public protocol ReleaseSource: Sendable {
     /// hour, it also brings back a version whose two days of Later are over.
     public func checkIfDue() async {
         if let available { putOff = isPutOff(available.version) }
+        defer { announce(manual: false) }
         guard automatic else { return }
         // A last check in the future (a clock that was ahead) is due: it would stop the checks until then.
         if let last = defaults.object(forKey: Self.lastCheckKey) as? Date,
@@ -137,10 +144,23 @@ public protocol ReleaseSource: Sendable {
         await run(manual: false)
     }
 
-    /// Check Now in Settings: asks at once and says how it went. A version put off stays so in
-    /// the sections: Settings shows it on its line anyway.
+    /// Check Now in Settings: asks at once and says how it went, and opens the window on a newer
+    /// version. A version put off stays so: Settings shows it on its line.
     public func checkNow() async {
         await run(manual: true)
+        announce(manual: true)
+    }
+
+    /// Opens the window on a newer version nobody put off and nothing is downloading: always after
+    /// Check Now, otherwise once per version.
+    private func announce(manual: Bool) {
+        guard let available, !putOff, !busy else { return }
+        if manual {
+            present?(.requested)
+        } else if announced != available.version {
+            present?(.automatic)
+        }
+        announced = available.version
     }
 
     /// Settings opened again: the line goes back to Check Now.
@@ -210,9 +230,9 @@ public protocol ReleaseSource: Sendable {
         return now() < until
     }
 
-    // MARK: - Banner
+    // MARK: - Window
 
-    /// Later: hidden in the sections for two days from now, each time. A newer version shows at once.
+    /// Later: put off for two days from now, each time. A newer version opens the window at once.
     public func later() {
         guard let available, !busy else { return }
         defaults.set(available.version.description, forKey: Self.laterVersionKey)
@@ -220,7 +240,7 @@ public protocol ReleaseSource: Sendable {
         markPutOff()
     }
 
-    /// Skip This Version: hidden in the sections until a newer version.
+    /// Skip This Version: put off until a newer version.
     public func skip() {
         guard let available, !busy else { return }
         defaults.set(available.version.description, forKey: Self.skippedKey)
@@ -229,21 +249,23 @@ public protocol ReleaseSource: Sendable {
 
     private func markPutOff() {
         putOff = true
-        expanded = false
+        announced = nil
         stage = .offer
     }
 
-    /// Download… in the banner, or "Stelix 1.1 available" in Settings: the details, with Download.
-    public func showDetails() {
+    /// "Stelix 1.1 available" in Settings: the window, in front, even for a version put off.
+    public func openWindow() {
         guard available != nil else { return }
-        expanded = true
+        present?(.requested)
     }
 
-    /// Settings opened or closed: the details fold, and a failure is forgotten (Download is there
-    /// again). A download under way, or one ready in Downloads, stays.
-    public func fold() {
-        expanded = false
-        if case .failed = stage { stage = .offer }
+    /// The window's close button: Later, and a failure is forgotten. A download under way, or one
+    /// ready in Downloads, stays as it is: Settings brings the window back.
+    public func windowClosed() {
+        switch stage {
+        case .offer, .failed: later()
+        case .downloading, .verifying, .ready: break
+        }
     }
 
     // MARK: - Download

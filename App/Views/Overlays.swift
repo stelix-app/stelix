@@ -126,15 +126,14 @@ struct SettingsOverlay: View {
 }
 
 /// Next to the version in Settings: Check Now, then how it went; or the newest version found,
-/// which opens its details in the box above, with Download, even if Later or Skip This Version
-/// put it off in the sections.
+/// which opens the update window, even if Later or Skip This Version put it off.
 struct UpdateStatus: View {
     let updates: UpdateCenter
 
     var body: some View {
         Group {
             if let update = updates.available {
-                Button(Copy.settingsUpdateAvailable(update.version.description)) { updates.showDetails() }
+                Button(Copy.settingsUpdateAvailable(update.version.description)) { updates.openWindow() }
                     .buttonStyle(.link)
             } else {
                 switch updates.check {

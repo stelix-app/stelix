@@ -48,11 +48,6 @@ struct PanelView: View {
                 ErrorBanner(message: Copy.failure(failure)) { controller.select(controller.selected) }
             }
 
-            // In Settings only after a click on its line there, and without Later or Skip.
-            if let updates, settings.isOpen ? updates.showsSettingsBox : updates.showsBanner {
-                UpdateBanner(updates: updates, inSettings: settings.isOpen)
-            }
-
             if settings.isOpen {
                 if settings.showsAbout {
                     AboutOverlay(settings: settings, catalog: models.library.store.catalog)
@@ -67,8 +62,6 @@ struct PanelView: View {
         }
         .padding(Tokens.padding)
         // Choosing a section means wanting to see it: settings close.
-        // Settings opened or closed: the update details fold (closing and reopening hides them).
-        .onChange(of: settings.isOpen) { updates?.fold() }
         .onChange(of: controller.selected) {
             settings.close()
             // Each section looks at the model files again (a few file checks): the Studio then asks
