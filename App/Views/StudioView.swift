@@ -177,9 +177,13 @@ struct StudioView: View {
                 VStack(alignment: .leading, spacing: Tokens.spaceS) {
                     stems(result)
                     // Under the last stem, above play and "to the start", as in Live (Gabriele, 13/11).
-                    if #available(macOS 27, *) {
-                        TempoLabel(bpm: result.bpm(at: studio.position))
-                    }
+                    MusicRow(bpm: result.bpm(at: studio.position),
+                             key: result.key(at: studio.position)?.transposed(by: studio.transpose.semitones),
+                             showsAnalysis: MusicRow.analysisAvailable,
+                             transpose: studio.transpose,
+                             onRaise: { studio.raiseTranspose() },
+                             onLower: { studio.lowerTranspose() },
+                             onSet: { studio.setTranspose($0) })
                     SoloHint()
                 }
                 transport(result)
@@ -296,7 +300,19 @@ struct StudioView: View {
                     .font(Typography.stat)
                     .foregroundStyle(.secondary)
                 Spacer()
-                if studio.session.savedFolder == nil {
+                if let progress = studio.saveProgress {
+                    // A transposed save: how far it is, and the way out.
+                    ProgressView(value: progress)
+                        .progressViewStyle(.linear)
+                        .controlSize(.small)
+                        .frame(width: 72)
+                        .accessibilityLabel(Copy.studioSave)
+                    Button { studio.cancelSave() } label: {
+                        Text(Copy.studioCancel)
+                    }
+                    .stelixGlassButton()
+                    .controlSize(.large)
+                } else if studio.session.savedFolder == nil {
                     Button { studio.save() } label: {
                         Label(Copy.studioSave, systemImage: "square.and.arrow.down")
                     }

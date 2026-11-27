@@ -37,8 +37,8 @@ struct LogPrivacyTests {
 
     /// A Python traceback or a library error may name a file under the user's home folder.
     @Test func homeFolderBecomesTilde() {
-        let line = "FileNotFoundError: '/Users/gabriele/Library/Application Support/Stelix/Models/roformer/x.yaml'"
-        #expect(LogPrivacy.redact(line, home: "/Users/gabriele")
+        let line = "FileNotFoundError: '/Users/x/Library/Application Support/Stelix/Models/roformer/x.yaml'"
+        #expect(LogPrivacy.redact(line, home: "/Users/x")
             == "FileNotFoundError: '~/Library/Application Support/Stelix/Models/roformer/x.yaml'")
     }
 
@@ -71,7 +71,7 @@ struct LogPrivacyTests {
 
     /// What the engine writes about a file the user gave it: the type, never the name or the folder.
     @Test func fileDescriptionHasOnlyTheExtension() {
-        let url = URL(fileURLWithPath: "/Users/gabriele/Music/Artist - Secret Title.MP3")
+        let url = URL(fileURLWithPath: "/Users/x/Music/Artist - Secret Title.MP3")
         #expect(LogPrivacy.describe(file: url) == "mp3 file")
         #expect(LogPrivacy.describe(file: URL(fileURLWithPath: "/tmp/no extension")) == "file")
     }

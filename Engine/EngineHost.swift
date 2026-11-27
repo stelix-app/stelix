@@ -18,6 +18,7 @@ final class EngineHost: Sendable {
     private let recorder: Recorder
     private let separator: OfflineSeparator
     private let player: StudioPlayer
+    private let keys: KeyScans
     /// Recordings and stems, until the user saves.
     private let scratch = StudioScratch()
 
@@ -26,9 +27,17 @@ final class EngineHost: Sendable {
         live = LiveEngine(emit: { event in EngineHost.write(event, on: stdout) })
         let scratch = scratch
         recorder = Recorder(scratch: scratch, emit: { event in EngineHost.write(event, on: stdout) })
-        let player = StudioPlayer(emit: { event in EngineHost.write(event, on: stdout) })
+        // Where the player is, for the key windows: the ones there come first.
+        let heard = Mutex(0.0)
+        let player = StudioPlayer(emit: { event in
+            if case .player(let position, _, _) = event { heard.withLock { $0 = position } }
+            EngineHost.write(event, on: stdout)
+        })
         self.player = player
-        separator = OfflineSeparator(scratch: scratch, emit: { event in EngineHost.write(event, on: stdout) },
+        let keys = KeyScans(emit: { event in EngineHost.write(event, on: stdout) },
+                            position: { heard.withLock { $0 } })
+        self.keys = keys
+        separator = OfflineSeparator(scratch: scratch, keys: keys, emit: { event in EngineHost.write(event, on: stdout) },
                                      finished: { result in
                                          player.load(result)
                                          // The new stems are in the player: the previous ones can be deleted.
@@ -68,6 +77,10 @@ final class EngineHost: Sendable {
                 player.setTelemetry(on)
             case .debugMeasureDelay:
                 live.measureDelay()
+            case .setTranspose(let semitones):
+                // Like the mix: Live and Studio never live in the same engine, the one not active keeps only the value.
+                live.setTranspose(Transpose(semitones: semitones))
+                player.setTranspose(Transpose(semitones: semitones))
             case .shutdown:
                 exitOnce()
             case .startRecording:
@@ -95,8 +108,11 @@ final class EngineHost: Sendable {
                 // Stems of an earlier engine: in the player, and their folder is the one to keep.
                 scratch.loaded(URL(fileURLWithPath: result.folder, isDirectory: true))
                 player.load(result, at: position)
+            case .scanKeys(let path, let folder, let done):
+                keys.resume(path: path, folder: folder, done: done)
             case .clearStudio:
                 if separator.isBusy || recorder.isRecording { return }
+                keys.stop()
                 player.stopAndWait()
                 scratch.clear()
             }
@@ -147,6 +163,7 @@ final class EngineHost: Sendable {
         // Player first: the separator can take a few tenths of a second to stop, and
         // meanwhile the stems must not play.
         player.stopAndWait()
+        keys.stop()
         recorder.stopAndWait()
         separator.stopAndWait()
         // The stems of the player outlive the engine: the app shows them again in the next Studio

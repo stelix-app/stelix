@@ -63,6 +63,10 @@ import StelixCore
     private(set) var measurement: Measurement?
     /// The tempo of what plays, from the engine (macOS 27, panel open); `nil` on silence.
     private(set) var tempo: Double?
+    /// The key of what plays, from the engine (macOS 27, panel open); `nil` on silence.
+    private(set) var key: MusicalKey?
+    /// Back to 0 with every new engine: leaving the Live and coming back starts at 0.
+    private(set) var transpose: Transpose = .off
 
     @ObservationIgnored weak var controller: ModeController?
     @ObservationIgnored private let defaults: UserDefaults
@@ -98,6 +102,16 @@ import StelixCore
         mix.controls[stem]?.volume = min(max(volume, 0), 1)
     }
 
+    func raiseTranspose() { setTranspose(transpose.raised()) }
+    func lowerTranspose() { setTranspose(transpose.lowered()) }
+
+    /// Every click goes out at once: they are few, and each one changes the sound.
+    func setTranspose(_ value: Transpose) {
+        guard value != transpose else { return }
+        transpose = value
+        controller?.send(.setTranspose(semitones: value.semitones))
+    }
+
     func selectLevel(_ level: LiveLevel) {
         self.level = level
     }
@@ -122,8 +136,11 @@ import StelixCore
 
     // MARK: - From the app
 
-    /// The Live start command, read at the moment of starting.
-    var startCommand: Command { .startLive(level: level, mix: mix) }
+    /// What a new Live engine receives first, read at the moment of starting: a click on the transpose while
+    /// the engine started was not sent (`ModeController.send` drops it), so it goes with the start.
+    var startCommands: [Command] {
+        [.startLive(level: level, mix: mix)] + (transpose.isOff ? [] : [.setTranspose(semitones: transpose.semitones)])
+    }
 
     /// A new engine is about to be born: nothing the old one said is valid anymore.
     func resetForNewEngine() {
@@ -133,13 +150,19 @@ import StelixCore
         permissionSuspected = false
         measurement = nil
         tempo = nil
+        key = nil
+        transpose = .off
     }
 
     /// Telemetry on only while the panel is open.
     func setPanelOpen(_ open: Bool) {
         panelOpen = open
-        // With the panel closed the engine stops analyzing: an old number must not show on reopening.
-        if !open { tempo = nil }
+        // With the panel closed the engine stops analyzing: an old number must not show on reopening. If the
+        // music did not pause meanwhile, the engine sends the key again at once.
+        if !open {
+            tempo = nil
+            key = nil
+        }
         controller?.send(.setTelemetry(open))
     }
 
@@ -161,6 +184,8 @@ import StelixCore
             measurement = .done(seconds: seconds)
         case .tempo(let bpm):
             tempo = bpm
+        case .key(let value):
+            key = value
         case .failure(let failure):
             if failure.code == "measure" { measurement = .failed(failure) }
         default:

@@ -34,14 +34,18 @@ public struct StemsResult: Codable, Sendable, Equatable {
     /// Beat times of the source track, in seconds; `nil` before macOS 27, if the analysis failed,
     /// or from an engine without it.
     public var beats: [Double]?
+    /// The key over the clip, filled in by `.keyScan` after the stems; `nil` until the first windows,
+    /// before macOS 27, or from an engine without it.
+    public var keyScan: KeyScan?
 
     public init(folder: String, files: [Stem: String], duration: Double, waveforms: [Stem: [Float]],
-                beats: [Double]? = nil) {
+                beats: [Double]? = nil, keyScan: KeyScan? = nil) {
         self.folder = folder
         self.files = files
         self.duration = duration
         self.waveforms = waveforms
         self.beats = beats
+        self.keyScan = keyScan
     }
 
     /// Seconds each side of a point in which some stem must be above the threshold for a tempo to show.
@@ -53,6 +57,13 @@ public struct StemsResult: Codable, Sendable, Equatable {
         guard let beats else { return nil }
         if isSilent(around: time) { return nil }
         return TempoMap(beats: beats).bpm(at: time)
+    }
+
+    /// The sure key at `time`, or `nil`: not analyzed there yet, unsure, or the stems are silent there.
+    public func key(at time: Double) -> MusicalKey? {
+        guard let keyScan else { return nil }
+        if isSilent(around: time) { return nil }
+        return keyScan.key(at: time)
     }
 
     private func isSilent(around time: Double) -> Bool {
@@ -170,6 +181,10 @@ public enum Event: Codable, Sendable, Equatable {
     case measuredDelay(seconds: Double)
     /// Live tempo, every `LiveTempoWindow.hop` s with the panel open; `nil` on silence.
     case tempo(bpm: Double?)
+    /// Live key, only when it changes; `nil` on silence.
+    case key(MusicalKey?)
+    /// The Studio key so far, for the stems in `folder`: after `.stemsReady`, then as the windows arrive.
+    case keyScan(folder: String, KeyScan)
     case failure(EngineFailure)
 }
 

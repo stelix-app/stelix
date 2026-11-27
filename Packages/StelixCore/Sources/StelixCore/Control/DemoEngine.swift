@@ -72,7 +72,7 @@ public final class DemoEngine: EngineConnection {
             finish()
         case .loadStems(let result, let position):
             continuation.yield(.player(position: position, duration: result.duration, playing: false))
-        case .setLiveLevel, .setMix, .setTelemetry, .clearStudio:
+        case .setLiveLevel, .setMix, .setTelemetry, .clearStudio, .setTranspose, .scanKeys:
             break
         }
     }

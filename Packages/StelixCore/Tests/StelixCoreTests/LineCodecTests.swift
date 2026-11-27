@@ -25,6 +25,10 @@ struct LineCodecTests {
         .clearStudio,
         .setTelemetry(true),
         .debugMeasureDelay,
+        .setTranspose(semitones: 3),
+        .scanKeys(path: "/m/a.mp3", folder: "/m/a", done: nil),
+        .scanKeys(path: "/m/a.mp3", folder: "/m/a", done: KeyScan(duration: 60, windows: [KeyWindow(index: 4, key: nil)])),
+        .setTranspose(semitones: -12),
         .shutdown,
     ]
 
@@ -46,8 +50,15 @@ struct LineCodecTests {
                                 waveforms: [.vocals: [0, 0.5, 1]])),
         .stemsReady(StemsResult(folder: "/f", files: [.vocals: "vocals.wav"], duration: 10,
                                 waveforms: [.vocals: [0, 0.5, 1]], beats: [0.25, 0.95, 1.65])),
+        .stemsReady(StemsResult(folder: "/f", files: [.vocals: "vocals.wav"], duration: 30,
+                                waveforms: [.vocals: [0, 0.5, 1]],
+                                keyScan: KeyScan(duration: 30, windows: [KeyWindow(index: 0, key: MusicalKey(pitchClass: 9, mode: .minor)),
+                                                                         KeyWindow(index: 1, key: nil)]))),
+        .keyScan(folder: "/f", KeyScan(duration: 30, windows: [KeyWindow(index: 2, key: MusicalKey(pitchClass: 0, mode: .major))])),
         .tempo(bpm: 91.5),
         .tempo(bpm: nil),
+        .key(MusicalKey(pitchClass: 9, mode: .minor)),
+        .key(nil),
         .player(position: 1.5, duration: 10, playing: true),
         .permissionSuspected,
         .measuredDelay(seconds: 1.01),
@@ -183,5 +194,15 @@ struct LineCodecTests {
         guard case .stemsReady(let result) = event else { Issue.record("not stemsReady"); return }
         #expect(result.beats == nil)
         #expect(result.duration == 10)
+    }
+
+    /// A line from a 1.0.0 engine: the stems arrive, with no keys.
+    @Test func stemsWithoutKeysStillDecode() throws {
+        let line = #"{"stemsReady":{"_0":{"folder":"/f","files":{},"duration":10,"waveforms":{},"beats":[0.5,1]}}}"# + "\n"
+        var decoder = LineDecoder<Event>()
+        let event = try #require(try decoder.feed(Data(line.utf8)).first?.get())
+        guard case .stemsReady(let result) = event else { Issue.record("not stemsReady"); return }
+        #expect(result.keyScan == nil)
+        #expect(result.beats == [0.5, 1])
     }
 }

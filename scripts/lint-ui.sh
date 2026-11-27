@@ -34,6 +34,12 @@ hits=$(grep -nE 'Text\((verbatim: *)?"[^"]*[A-Za-zÀ-ÿ]' $OTHERS || true)
 [ -n "$hits" ] && fail "literal text outside Copy.swift:
 $hits"
 
+# TextField without a title: on macOS the title shows as a placeholder in the empty field,
+# and every field already has its name written next to it.
+hits=$(grep -nE 'TextField\(' $FILES | grep -vE 'TextField\("",' || true)
+[ -n "$hits" ] && fail "TextField with a title (it shows as a placeholder):
+$hits"
+
 # Localized strings: code and String Catalogs agree
 "$ROOT/scripts/check-strings.py" || FAIL=1
 

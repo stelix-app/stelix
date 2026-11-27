@@ -85,17 +85,21 @@ public enum StemFiles {
         return Dictionary(uniqueKeysWithValues: partials.map { ($0.stem, $0.final) })
     }
 
+    /// The stems' file format: stereo Float32 WAV. The file type is stated, not left to the extension.
+    public static func wavSettings(sampleRate: Double) -> [String: Any] {
+        [AVAudioFileTypeKey: kAudioFileWAVEType,
+         AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: sampleRate, AVNumberOfChannelsKey: 2,
+         AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true,
+         AVLinearPCMIsNonInterleaved: false, AVLinearPCMIsBigEndianKey: false]
+    }
+
     /// Stereo Float32 WAV, closed before returning (header with the right length). The file type is
     /// stated, not left to the extension: `write` writes to `.<name>.partial`, which AVAudioFile turns into a CAF.
     public static func writeWAV(_ planarStereo: [Float], frames: Int, sampleRate: Double, to url: URL) throws(EngineFailure) {
         guard planarStereo.count >= 2 * frames,
               let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2),
-              let file = try? AVAudioFile(forWriting: url, settings: [
-                  AVAudioFileTypeKey: kAudioFileWAVEType,
-                  AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: sampleRate, AVNumberOfChannelsKey: 2,
-                  AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true,
-                  AVLinearPCMIsNonInterleaved: false, AVLinearPCMIsBigEndianKey: false,
-              ], commonFormat: .pcmFormatFloat32, interleaved: false),
+              let file = try? AVAudioFile(forWriting: url, settings: wavSettings(sampleRate: sampleRate),
+                                          commonFormat: .pcmFormatFloat32, interleaved: false),
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(max(1, frames)))
         else { throw writeFailed }
         buffer.frameLength = AVAudioFrameCount(frames)

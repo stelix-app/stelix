@@ -73,6 +73,8 @@ final class LiveEngine: @unchecked Sendable {
     /// A delay measurement is in progress: a second request is ignored (it would reset the capture and
     /// give two `.measuredDelay`).
     private var measuring = false
+    /// The transpose asked by the app; every new pipeline is born with it. Back to 0 at every start.
+    private var transpose = Transpose.off
 
     static let fadeSeconds = 0.040
     private static let monitorInterval = DispatchTimeInterval.milliseconds(50)
@@ -116,6 +118,7 @@ final class LiveEngine: @unchecked Sendable {
             underrunsBefore = 0
             recovery = LiveRecovery()
             restretches = 0
+            transpose = .off
             idle = LiveIdleTimer(startedAt: Self.now())
             emit(.live(.warming))
             watcher = DeviceWatcher { [weak self] in self?.control.async { self?.deviceChanged() } }
@@ -133,6 +136,30 @@ final class LiveEngine: @unchecked Sendable {
             guard level != self.level else { return }
             guard active else { self.level = level; return }
             changeLevel(level)
+        }
+    }
+
+    /// From 0 the transposed path enters, to 0 it leaves (40 ms fade around both); between two values only
+    /// the pitch changes. Without a pipeline the value waits for the next one.
+    func setTranspose(_ value: Transpose) {
+        control.async { [self] in
+            transpose = value
+            guard let pipeline else { return }
+            switch TransposeTransition(from: pipeline.transpose, to: value) {
+            case .none:
+                break
+            case .retune(let semitones):
+                pipeline.setTransposeSemitones(semitones)
+            case .enter(let semitones):
+                guard let chain = makeChain(for: pipeline, semitones: semitones) else { return }
+                fadeAround(pipeline) { pipeline.installTranspose(chain, semitones: semitones) }
+            case .leave:
+                fadeAround(pipeline) {
+                    if !pipeline.removeTranspose() {
+                        engineLog("live: the IOProc did not leave the transpose in time, kept until the pipeline goes")
+                    }
+                }
+            }
         }
     }
 
@@ -178,7 +205,7 @@ final class LiveEngine: @unchecked Sendable {
             }
             let signals = pipeline.capturedSignals()
             let rate = pipeline.timing.deviceRate
-            let expected = pipeline.timing.delaySeconds
+            let expected = pipeline.expectedDelaySeconds
             DispatchQueue.global(qos: .utility).async { [self] in
                 let found = DelayEstimator.lag(reference: signals.input, delayed: signals.output, maxLag: Int(rate * (LiveSchedule.maxDelay + 1)))
                 control.async { [self] in
@@ -215,6 +242,32 @@ final class LiveEngine: @unchecked Sendable {
     }
 
     // MARK: On the `control` queue
+
+    /// The transposed path for `pipeline`, built here and never in the IOProc; `nil` (logged) if the
+    /// system's time pitch cannot be created or the model has no drums to keep apart.
+    private func makeChain(for pipeline: LivePipeline, semitones: Int) -> TransposeChain? {
+        guard pipeline.drumsIndex != nil else {
+            engineLog("live: no drums stem, transpose unavailable")
+            return nil
+        }
+        do throws(EngineFailure) {
+            return try TransposeChain(sampleRate: pipeline.timing.deviceRate, semitones: semitones)
+        } catch {
+            engineLog("live: transpose unavailable (\(error.code))")
+            return nil
+        }
+    }
+
+    /// The master down in 40 ms, `body`, the master up again: only if the Live is playing.
+    private func fadeAround(_ pipeline: LivePipeline, _ body: () -> Void) {
+        let playing = pipeline.isRunning
+        if playing {
+            pipeline.mixer.setMaster(0)
+            Thread.sleep(forTimeInterval: Self.fadeSeconds + 0.015)
+        }
+        body()
+        if playing { pipeline.mixer.setMaster(1) }
+    }
 
     private func applyMix(_ mix: StemMix) {
         self.mix = mix
@@ -342,6 +395,10 @@ final class LiveEngine: @unchecked Sendable {
         let timing = LiveTiming(level: level, schedule: schedule, deviceRate: tap.format.sampleRate)
         let pipeline = LivePipeline(tap: tap, timing: timing, model: model)
         pipeline.mixer.apply(mix)
+        // A rebuild (output, level, a slower Mac) keeps the transpose: the master starts at 0 anyway.
+        if !transpose.isOff, let chain = makeChain(for: pipeline, semitones: transpose.semitones) {
+            pipeline.installTranspose(chain, semitones: transpose.semitones)
+        }
         if watchdog == nil { watchdog = SilenceWatchdog(sampleRate: tap.format.sampleRate) }
         lastWritten = 0
         lastFillEmit = -1
@@ -468,7 +525,8 @@ final class LiveEngine: @unchecked Sendable {
     private func tick() {
         guard active else { return }
         let outputIO = pipeline.map { CoreAudioProperty.isRunningSomewhere($0.tap.signature.device) }
-        if idle.observe(at: Self.now(), outputRunning: outputIO ?? false, peak: pipeline?.takePeak() ?? 0) {
+        let peak = pipeline?.takePeak() ?? 0
+        if idle.observe(at: Self.now(), outputRunning: outputIO ?? false, peak: peak) {
             stopForSilence()
             return
         }
@@ -566,7 +624,8 @@ final class LiveEngine: @unchecked Sendable {
             }
         }
 
-        tempo?.tick(pipeline: pipeline, active: telemetry && pipeline.isRunning, now: Self.now())
+        tempo?.tick(pipeline: pipeline, playing: pipeline.isRunning, panelOpen: telemetry,
+                    peak: (outputIO ?? false) ? peak : 0, now: Self.now())
 
         if pipeline.isRunning, let levels = pipeline.worker.levels(after: lastLevels) {
             lastLevels = levels.sequence
@@ -598,7 +657,13 @@ final class LivePipeline: @unchecked Sendable {
     let mixer: StemMixer
     let worker: SeparationWorker
     let model: SeparationModel
+    /// Where the drums are in the model's stems: they never go through the time pitch.
+    let drumsIndex: Int?
     private let state: RenderState
+    /// The transposed path the IOProc uses, and the ones it may still be inside of; on the `control`
+    /// queue. They go with the pipeline, after `AudioDeviceStop`.
+    private var chain: TransposeChain?
+    private var retiredChains: [TransposeChain] = []
 
     /// The ring holds 12 s: the model windows are 7.8 s. The timeline holds 10 s, above the
     /// longest delay plus one hop (`LiveSchedule.maxDelay`: 5 s, with a hop of at most 2.5 s).
@@ -612,6 +677,46 @@ final class LivePipeline: @unchecked Sendable {
         mixer = StemMixer(stems: model.stems, sampleRate: rate)
         state = RenderState(stems: model.stems.count, maxFrames: 4096, captureFrames: Int(rate * Self.captureSeconds))
         worker = SeparationWorker(ring: ring, timeline: timeline, timing: timing, model: model)
+        drumsIndex = model.stems.firstIndex(of: .drums)
+    }
+
+    // MARK: Transpose (on the `control` queue)
+
+    /// The transpose the IOProc plays: `.off` without a chain.
+    var transpose: Transpose {
+        chain == nil ? .off : Transpose(semitones: state.semitones.load(ordering: .relaxed))
+    }
+
+    /// From the next callback the IOProc takes the transposed path.
+    func installTranspose(_ chain: TransposeChain, semitones: Int) {
+        if let old = self.chain { retiredChains.append(old) }
+        state.semitones.store(semitones, ordering: .relaxed)
+        self.chain = chain
+        state.chain.store(Unmanaged.passUnretained(chain).toOpaque(), ordering: .sequentiallyConsistent)
+    }
+
+    /// The pitch of the chain in use; the IOProc passes it on once per callback.
+    func setTransposeSemitones(_ semitones: Int) {
+        state.semitones.store(semitones, ordering: .relaxed)
+    }
+
+    /// Back to the 1.0.0 path. A callback marks `inUse` before reading the chain: once the chain is gone and
+    /// `inUse` is false, no callback can still be inside it. `false`: not out within 0.5 s (a stuck device);
+    /// the chain is kept until the pipeline dies.
+    @discardableResult
+    func removeTranspose() -> Bool {
+        guard let old = chain else { return true }
+        chain = nil
+        state.chain.store(nil, ordering: .sequentiallyConsistent)
+        let deadline = DispatchTime.now() + 0.5
+        while state.inUse.load(ordering: .sequentiallyConsistent) {
+            guard DispatchTime.now() < deadline else {
+                retiredChains.append(old)
+                return false
+            }
+            Thread.sleep(forTimeInterval: 0.001)
+        }
+        return true
     }
 
     /// Long enough to find the longest delay with 4 s of overlap.
@@ -635,9 +740,16 @@ final class LivePipeline: @unchecked Sendable {
     }
     var underruns: Int { state.underruns.load(ordering: .relaxed) }
 
-    /// Real delay: most recent input frame minus frame being played, measured in the IOProc.
+    /// Real delay: most recent input frame minus frame being played, measured in the IOProc, plus the
+    /// time pitch's latency when the IOProc takes the transposed path (a constant: measured on 25/11).
     var delaySeconds: Double {
-        Double(state.inputEnd.load(ordering: .relaxed) - state.playEnd.load(ordering: .relaxed)) / timing.deviceRate
+        Double(state.inputEnd.load(ordering: .relaxed) - state.playEnd.load(ordering: .relaxed)
+               + Int64(state.extraDelay.load(ordering: .relaxed))) / timing.deviceRate
+    }
+
+    /// What the delay measurement should find, with the time pitch's latency when transposed.
+    var expectedDelaySeconds: Double {
+        timing.expectedDelaySeconds(extraFrames: state.extraDelay.load(ordering: .relaxed))
     }
 
     /// The timeline is full for the delay: the master comes in with the 40 ms fade and from here underruns count.
@@ -662,6 +774,7 @@ final class LivePipeline: @unchecked Sendable {
         let inChannels = tap.format.inputChannels
         let outChannels = tap.format.outputChannels
         let delay = Int64(timing.delayFrames)
+        let drumsIndex = drumsIndex ?? 0
         return { input, output, frames in
             let start = ring.writtenFrames
             ring.write(input, frames: frames)
@@ -678,18 +791,45 @@ final class LivePipeline: @unchecked Sendable {
             guard let output else { return }
 
             let counting = state.playing.load(ordering: .relaxed)
-            var done = 0
-            while done < frames {
-                let n = min(frames - done, state.maxFrames)
-                let playFrame = start + Int64(done) - delay
-                // The model is late and the timeline is about to end: fade before the gap, not after.
-                if counting { mixer.guardAgainstGap(framesAhead: timeline.availableUpTo - playFrame, frames: n) }
-                let got = timeline.read(at: playFrame, frames: n, into: state.stems)
-                if counting && got < n { state.underruns.add(1, ordering: .relaxed) }
-                mixer.render(stemFrames: state.stems, frames: n, channels: 2,
-                             out: output + done * outChannels, outChannels: outChannels)
-                done += n
+            // Marked before the chain is read: `removeTranspose` waits for it (see there).
+            state.inUse.store(true, ordering: .sequentiallyConsistent)
+            if let transposed = state.chain.load(ordering: .sequentiallyConsistent) {
+                // Transposed: the drums and the rest apart, the rest through the time pitch, the drums through a
+                // delay of the same latency, then the master. No retain here: the pipeline keeps the chain.
+                Unmanaged<TransposeChain>.fromOpaque(transposed)._withUnsafeGuaranteedRef { chain in
+                    chain.setSemitones(state.semitones.load(ordering: .relaxed))
+                    var done = 0
+                    while done < frames {
+                        let n = min(frames - done, state.maxFrames)
+                        let playFrame = start + Int64(done) - delay
+                        if counting { mixer.guardAgainstGap(framesAhead: timeline.availableUpTo - playFrame, frames: n) }
+                        let got = timeline.read(at: playFrame, frames: n, into: state.stems)
+                        if counting && got < n { state.underruns.add(1, ordering: .relaxed) }
+                        mixer.renderSplit(stemFrames: state.stems, frames: n, channels: 2, splitStem: drumsIndex,
+                                          split: state.drums, rest: state.rest)
+                        chain.process(drums: state.drums, rest: state.rest, frames: n, into: state.sum)
+                        mixer.finish(state.sum, frames: n, out: output + done * outChannels, outChannels: outChannels)
+                        done += n
+                    }
+                    state.extraDelay.store(chain.latencyFrames, ordering: .relaxed)
+                }
+            } else {
+                // At 0 semitones: the path of 1.0.0.
+                state.extraDelay.store(0, ordering: .relaxed)
+                var done = 0
+                while done < frames {
+                    let n = min(frames - done, state.maxFrames)
+                    let playFrame = start + Int64(done) - delay
+                    // The model is late and the timeline is about to end: fade before the gap, not after.
+                    if counting { mixer.guardAgainstGap(framesAhead: timeline.availableUpTo - playFrame, frames: n) }
+                    let got = timeline.read(at: playFrame, frames: n, into: state.stems)
+                    if counting && got < n { state.underruns.add(1, ordering: .relaxed) }
+                    mixer.render(stemFrames: state.stems, frames: n, channels: 2,
+                                 out: output + done * outChannels, outChannels: outChannels)
+                    done += n
+                }
             }
+            state.inUse.store(false, ordering: .sequentiallyConsistent)
 
             // Delay measurement: channel 0 of input and output, in preallocated buffers.
             if state.capturing.load(ordering: .acquiring) {
@@ -722,6 +862,16 @@ private final class RenderState: @unchecked Sendable {
     let captureOut: UnsafeMutablePointer<Float>
     let capturing = Atomic<Bool>(false)
     let captured = Atomic<Int>(0)
+    /// The transposed path (`Unmanaged<TransposeChain>`), `nil` at 0 semitones; its pitch; whether a
+    /// callback may be inside it; its latency while the IOProc uses it.
+    let chain = Atomic<UnsafeMutableRawPointer?>(nil)
+    let semitones = Atomic<Int>(0)
+    let inUse = Atomic<Bool>(false)
+    let extraDelay = Atomic<Int>(0)
+    /// Stereo interleaved, `maxFrames` each: the drums, the rest, their transposed sum.
+    let drums: UnsafeMutablePointer<Float>
+    let rest: UnsafeMutablePointer<Float>
+    let sum: UnsafeMutablePointer<Float>
 
     init(stems count: Int, maxFrames: Int, captureFrames: Int) {
         self.maxFrames = maxFrames
@@ -732,12 +882,19 @@ private final class RenderState: @unchecked Sendable {
         captureIn.initialize(repeating: 0, count: captureFrames)
         captureOut = .allocate(capacity: captureFrames)
         captureOut.initialize(repeating: 0, count: captureFrames)
+        drums = .allocate(capacity: maxFrames * 2)
+        rest = .allocate(capacity: maxFrames * 2)
+        sum = .allocate(capacity: maxFrames * 2)
+        for buffer in [drums, rest, sum] { buffer.initialize(repeating: 0, count: maxFrames * 2) }
     }
 
     deinit {
         stems.deallocate()
         captureIn.deallocate()
         captureOut.deallocate()
+        drums.deallocate()
+        rest.deallocate()
+        sum.deallocate()
     }
 }
 

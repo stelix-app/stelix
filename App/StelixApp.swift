@@ -116,7 +116,7 @@ struct LaunchOptions {
             },
             startCommands: { mode in
                 switch mode {
-                case .live: [live.startCommand]
+                case .live: live.startCommands
                 // The Studio snapshot wants it listening: DemoEngine fakes a separation.
                 case .studio where snapshotStudio: studio.takeStartCommands()
                     + [.separateFile(path: NSHomeDirectory() + "/Music/Stelix/demo/demo.wav", level: studio.level)]
@@ -289,7 +289,7 @@ struct LaunchOptions {
         isTerminating = true
         panel.hide()
         Task {
-            await studio.finishSaving()
+            await studio.finishSaving(cancellingTransposed: true)
             await modeController.shutdown()
             if ownsScratch { StudioScratch.clear() }
             sender.reply(toApplicationShouldTerminate: true)

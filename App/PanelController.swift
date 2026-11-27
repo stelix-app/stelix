@@ -108,6 +108,9 @@ final class RoundedClipView: NSView {
         resize(to: hostingView.fittingSize)
         panel.orderFrontRegardless()
         panel.makeKey()
+        // Becoming key, AppKit gives the focus to the first view that takes it: the transpose field, all
+        // selected. The panel opens with nothing focused; a click in the field focuses it.
+        panel.makeFirstResponder(nil)
         installMonitors()
         live.setPanelOpen(true)
         studio.setPanelOpen(true)
@@ -211,7 +214,8 @@ final class RoundedClipView: NSView {
                    !(self.panel?.firstResponder is NSText) {
                     return self.studio.spaceKey(isRepeat: isRepeat)
                 }
-                if keyCode == 53, self?.holdOpen == false { // Esc: settings first, then the panel
+                // Esc: a field being typed in first (the transpose drops the edit), then settings, then the panel.
+                if keyCode == 53, self?.holdOpen == false, !(self?.panel?.firstResponder is NSText) {
                     if self?.settings.isOpen == true {
                         self?.settings.close()
                     } else {

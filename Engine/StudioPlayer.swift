@@ -7,9 +7,11 @@ import Foundation
 import StelixCore
 import Synchronization
 
-/// The Studio player: `AVAudioEngine` with one `AVAudioPlayerNode` per stem, all on the main
-/// mixer. They are started together at the same `AVAudioTime`; pause and seek stop all the
-/// nodes and reschedule them from the right frame, so they stay in sync.
+/// The Studio player: `AVAudioEngine` with one `AVAudioPlayerNode` per stem, connected by `StudioGraph`
+/// (all on the main mixer at 0 semitones; the stems but the drums through the time pitch otherwise).
+/// They are started together at the same `AVAudioTime`; pause and seek stop all the nodes and reschedule
+/// them from the right frame, so they stay in sync. Every load starts at 0 semitones: the app sends the
+/// transpose after the stems (`StudioSession`).
 ///
 /// - `.setMix` → `node.volume = effectiveGain`;
 /// - `.player(position:duration:playing:)` at 10 Hz while it plays, and at every state change;
@@ -21,6 +23,7 @@ final class StudioPlayer: @unchecked Sendable {
 
     // On the `queue` queue.
     private var engine: AVAudioEngine?
+    private var graph: StudioGraph?
     private var nodes: [Stem: AVAudioPlayerNode] = [:]
     private var files: [Stem: AVAudioFile] = [:]
     private var lengthFrames: AVAudioFramePosition = 0
@@ -96,6 +99,33 @@ final class StudioPlayer: @unchecked Sendable {
         queue.async { [self] in telemetry = on }
     }
 
+    /// Between two values only the pitch changes, playing. Crossing 0 rewires the graph: a pause with its
+    /// fade, then on from the same point if it was playing. Without stems: nothing.
+    func setTranspose(_ value: Transpose) {
+        queue.async { [self] in
+            guard let graph, let engine else { return }
+            guard value.isOff != graph.transpose.isOff else {
+                graph.setTranspose(value)
+                return
+            }
+            let wasPlaying = playing
+            let here = position
+            fadeOut()
+            for node in nodes.values { node.stop() }
+            playing = false
+            engine.stop()
+            graph.setTranspose(value)
+            installTaps()
+            engine.prepare()
+            do { try engine.start() } catch {
+                emit(.failure(EngineFailure(.outputUnplayable)))
+            }
+            startFrame = here
+            if wasPlaying { play() }
+            emitState()
+        }
+    }
+
     func stopAndWait() {
         queue.sync {
             fadeOut()
@@ -107,37 +137,25 @@ final class StudioPlayer: @unchecked Sendable {
 
     private func build(_ result: StemsResult) throws(EngineFailure) {
         let engine = AVAudioEngine()
-        var nodes: [Stem: AVAudioPlayerNode] = [:]
         var files: [Stem: AVAudioFile] = [:]
-        var length: AVAudioFramePosition = .max
         for stem in Stem.studio {
             guard let path = result.files[stem] else { continue }
             guard let file = try? AVAudioFile(forReading: URL(fileURLWithPath: path)) else {
                 throw EngineFailure(.stemUnreadable, detail: stem.rawValue)
             }
-            let node = AVAudioPlayerNode()
-            engine.attach(node)
-            engine.connect(node, to: engine.mainMixerNode, format: file.processingFormat)
-            nodes[stem] = node
             files[stem] = file
-            length = min(length, file.length)
-            sampleRate = file.processingFormat.sampleRate
         }
-        guard !nodes.isEmpty, length > 0, length != .max else {
-            throw EngineFailure(.noStems)
-        }
-        for (stem, node) in nodes {
-            node.installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
-                let value = Self.rms(buffer)
-                self?.rms.withLock { $0[stem] = value }
-            }
-        }
+        let graph = try StudioGraph(engine: engine, files: files)
+        let length = graph.lengthFrames
+        sampleRate = graph.sampleRate
+        self.graph = graph
+        self.nodes = graph.nodes
+        installTaps()
         engine.prepare()
         do { try engine.start() } catch {
             throw EngineFailure(.outputUnplayable)
         }
         self.engine = engine
-        self.nodes = nodes
         self.files = files
         lengthFrames = length
         startFrame = 0
@@ -158,6 +176,17 @@ final class StudioPlayer: @unchecked Sendable {
         engineLog(String(format: "player: %d stems, %.1f s at %.0f Hz", nodes.count, Double(length) / sampleRate, sampleRate))
     }
 
+    /// The levels of each stem, before the volume, like the Live ones. Again after a rewiring.
+    private func installTaps() {
+        for (stem, node) in nodes {
+            node.removeTap(onBus: 0)
+            node.installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
+                let value = Self.rms(buffer)
+                self?.rms.withLock { $0[stem] = value }
+            }
+        }
+    }
+
     private func teardown() {
         timer?.cancel()
         timer = nil
@@ -174,6 +203,7 @@ final class StudioPlayer: @unchecked Sendable {
         }
         engine?.stop()
         engine = nil
+        graph = nil
         nodes = [:]
         files = [:]
         playing = false
@@ -186,11 +216,14 @@ final class StudioPlayer: @unchecked Sendable {
         for (stem, node) in nodes { node.volume = mix.effectiveGain(stem) }
     }
 
+    /// From the clock node (the drums, which start as late as the time pitch delays the rest), minus what is
+    /// still in the limiter.
     private var position: AVAudioFramePosition {
         guard playing else { return startFrame }
-        guard let node = nodes.values.first, let nodeTime = node.lastRenderTime,
-              let playerTime = node.playerTime(forNodeTime: nodeTime) else { return max(startFrame, lastPosition) }
-        return min(lengthFrames, startFrame + max(0, playerTime.sampleTime))
+        guard let graph, let nodeTime = graph.clockNode.lastRenderTime,
+              let playerTime = graph.clockNode.playerTime(forNodeTime: nodeTime) else { return max(startFrame, lastPosition) }
+        let heard = playerTime.sampleTime - AVAudioFramePosition(graph.latencyFrames)
+        return min(lengthFrames, startFrame + max(0, heard))
     }
 
     private func play() {
@@ -202,15 +235,14 @@ final class StudioPlayer: @unchecked Sendable {
                 return
             }
         }
-        let count = AVAudioFrameCount(lengthFrames - startFrame)
-        for (stem, node) in nodes {
-            guard let file = files[stem] else { continue }
-            node.scheduleSegment(file, startingFrame: startFrame, frameCount: count, at: nil)
-        }
-        // All at the same instant, 50 ms in the future: enough to reach all the nodes.
+        guard let graph else { return }
+        // Also empties the time pitch: nothing from before a pause or a seek comes out.
+        graph.schedule(from: startFrame)
+        // All at the same instant (the drums as late as the time pitch delays the rest), 50 ms in the
+        // future: enough to reach all the nodes.
         let start = AVAudioTime(hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: 0.05))
-        fadeIn(after: 0.05)
-        for node in nodes.values { node.play(at: start) }
+        fadeIn(after: 0.05 + Double(graph.drumsDelayFrames + graph.latencyFrames) / sampleRate)
+        graph.play(at: start)
         lastPosition = startFrame
         playing = true
     }

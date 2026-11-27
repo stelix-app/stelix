@@ -60,10 +60,16 @@ public struct StudioSession: Sendable, Equatable {
     public private(set) var source: Source?
     /// The level the loaded stems were made with.
     public private(set) var stemsLevel: StudioLevel?
-    /// The folder in `~/Music/Stelix` where these stems were saved; `nil` until saved.
-    public private(set) var savedFolder: String?
+    /// The folder in `~/Music/Stelix` where these stems were saved at the current transpose; `nil` until
+    /// saved at that value. Another transpose is another save, in a new folder.
+    public var savedFolder: String? { savedFolders[transpose.semitones] }
+    /// The saved folders of these stems, by semitones.
+    private var savedFolders: [Int: String] = [:]
     /// The peaks of the recording in progress, at most `waveCap`, the most recent at the end.
     public private(set) var wave: [Float] = []
+    /// The transpose of the open clip. It stays while the clip is open (also across Change model and
+    /// leaving the Studio) and goes back to 0 with the stems of a new clip, or when the stems are lost.
+    public private(set) var transpose: Transpose = .off
 
     /// The job to redo with Retry; `nil` if what failed was not a job (the player).
     private var retryJob: Job?
@@ -73,6 +79,9 @@ public struct StudioSession: Sendable, Equatable {
     private var jobSource: Source?
     /// The level of the job in progress (or the last one); `nil` for a recording not yet finished.
     private var jobLevel: StudioLevel?
+    /// The job in progress is a new clip (Record or Choose file, even the same file again), not
+    /// Change model: its stems reset the transpose. Retry keeps it.
+    private var jobIsNewClip = false
     /// Stop sent, waiting for `.recorded`.
     private var stopRequested = false
     /// The engine has gone and the next Studio engine has not had `startCommands` yet: commands would be lost.
@@ -110,7 +119,7 @@ public struct StudioSession: Sendable, Equatable {
     // MARK: - Azioni
 
     public mutating func record() -> [Command] {
-        start(.record, level: .base)
+        startNewClip(.record, level: .base)
     }
 
     /// Stops the recording: what is there is separated, or thrown away if under a second.
@@ -122,7 +131,7 @@ public struct StudioSession: Sendable, Equatable {
     }
 
     public mutating func load(path: String, level: StudioLevel) -> [Command] {
-        start(.file(path: path), level: level)
+        startNewClip(.file(path: path), level: level)
     }
 
     /// Redoes the failed job; after a player error it goes back to the stems (or to the start). A
@@ -161,7 +170,9 @@ public struct StudioSession: Sendable, Equatable {
     public mutating func changeModel(to level: StudioLevel) -> [Command] {
         guard result != nil, let source, level != stemsLevel, !isBusy else { return [] }
         jobSource = source
-        return start(.file(path: source.path), level: level)
+        let commands = start(.file(path: source.path), level: level)
+        if !commands.isEmpty { jobIsNewClip = false }
+        return commands
     }
 
     /// The engine did not answer the cancellation in time (`StudioViewModel` waits a few
@@ -171,9 +182,19 @@ public struct StudioSession: Sendable, Equatable {
         pendingCancel = nil
     }
 
-    public mutating func markSaved(_ folder: String) {
+    /// Nothing without stems. Returns the command for the engine: none if the value did not change, or
+    /// while the engine is not up (`startCommands` carries it).
+    @discardableResult
+    public mutating func setTranspose(_ value: Transpose) -> [Command] {
+        guard result != nil, value != transpose else { return [] }
+        transpose = value
+        return awaitingEngine ? [] : [.setTranspose(semitones: value.semitones)]
+    }
+
+    /// `transpose`: the value the save started with, which the user may have changed meanwhile.
+    public mutating func markSaved(_ folder: String, transpose: Transpose? = nil) {
         guard result != nil else { return }
-        savedFolder = folder
+        savedFolders[(transpose ?? self.transpose).semitones] = folder
     }
 
     /// The space bar: only where the play button is, with the stems ready.
@@ -233,9 +254,12 @@ public struct StudioSession: Sendable, Equatable {
         defer { playOnStart = false }
         guard let result else { return [] }
         startingPlay = playOnStart ? 0 : nil
+        // Every load starts the player at 0: the transpose follows the stems.
         return [.setMix(mix), .loadStems(result, position: position)]
+            + (transpose.isOff ? [] : [.setTranspose(semitones: transpose.semitones)])
             + (playOnStart ? [.player(.play)] : [])
             + (telemetry ? [.setTelemetry(true)] : [])
+            + scanKeysCommand(result)
     }
 
     /// While the engine starts nothing is sent: the button shows Pause at once and the engine plays when it is up.
@@ -299,14 +323,22 @@ public struct StudioSession: Sendable, Equatable {
             // Also after a late cancellation: the engine has already loaded these stems.
             pendingCancel = nil
             cancelUnanswered = false
+            var newResult = newResult
+            // Change Model on the same clip: the key found so far stays until the engine sends it again.
+            if newResult.keyScan == nil, let old = result, old.folder == newResult.folder {
+                newResult.keyScan = old.keyScan
+            }
             result = newResult
             source = jobSource
             stemsLevel = jobLevel ?? stemsLevel ?? level
-            savedFolder = nil
+            savedFolders = [:]
+            if jobIsNewClip { transpose = .off }
             position = 0
             pendingSeek = nil
             playing = false
             stage = .ready(newResult)
+            // The player loaded them at 0: a transpose kept across Change Model goes to it again.
+            return transpose.isOff ? [] : [.setTranspose(semitones: transpose.semitones)]
         case .player(let newPosition, _, let isPlaying):
             if let stale = startingPlay, !isPlaying, stale < Self.maxStaleTicks {
                 startingPlay = stale + 1
@@ -323,11 +355,16 @@ public struct StudioSession: Sendable, Equatable {
             }
             pendingSeek = nil
             position = newPosition
+        case .keyScan(let folder, let scan):
+            guard var updated = result, updated.folder == folder else { break }
+            updated.keyScan = scan
+            result = updated
+            if case .ready = stage { stage = .ready(updated) }
         case .permissionSuspected:
             if case .recording = stage { permissionSuspected = true }
         case .failure(let failure):
             handle(failure)
-        case .ready, .live, .liveStats, .levels, .measuredDelay, .tempo:
+        case .ready, .live, .liveStats, .levels, .measuredDelay, .tempo, .key:
             break
         }
         return []
@@ -363,13 +400,23 @@ public struct StudioSession: Sendable, Equatable {
             result = nil
             source = nil
             stemsLevel = nil
-            savedFolder = nil
+            savedFolders = [:]
+            transpose = .off
         }
         retryJob = nil
         stage = .failed(failure)
     }
 
     // MARK: - Supporto
+
+    /// The key windows a new engine still has to analyze, from the clip's source: none when the scan is
+    /// complete, the clip is too short for a window, or the source is not known.
+    private func scanKeysCommand(_ result: StemsResult) -> [Command] {
+        guard let source else { return [] }
+        let scan = result.keyScan ?? KeyScan(duration: result.duration)
+        guard scan.windowCount > 0, !scan.isComplete else { return [] }
+        return [.scanKeys(path: source.path, folder: result.folder, done: result.keyScan)]
+    }
 
     /// Errors that depend on the file and do not change on retrying.
     private static let finalCodes: Set<String> = ["unsupported", "tooLong"]
@@ -380,6 +427,13 @@ public struct StudioSession: Sendable, Equatable {
 
     private var fallback: Stage {
         result.map { .ready($0) } ?? .idle
+    }
+
+    /// `start` for Record and Choose file: only a job that really starts marks a new clip.
+    private mutating func startNewClip(_ job: Job, level: StudioLevel) -> [Command] {
+        let commands = start(job, level: level)
+        if !commands.isEmpty { jobIsNewClip = true }
+        return commands
     }
 
     private mutating func start(_ job: Job, level: StudioLevel) -> [Command] {

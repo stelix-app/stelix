@@ -45,6 +45,8 @@ import UniformTypeIdentifiers
     private(set) var levels: [Stem: Float] = [:]
     /// Save is copying the stems into `~/Music/Stelix`.
     private(set) var saving = false
+    /// A transposed save in progress, from 0 to 1; `nil` otherwise (a plain copy shows no bar).
+    private(set) var saveProgress: Double?
     /// "Change model" pressed: the picker is free again, the next level separates the track again.
     private(set) var changingModel = false
     /// The file picker is open: Record and the rest wait, otherwise the file chosen after
@@ -103,6 +105,8 @@ import UniformTypeIdentifiers
     @ObservationIgnored var clearScratch: () -> Void = {}
     /// The Save copy in progress: on exit we wait, before emptying the temporary folder.
     @ObservationIgnored private var saveTask: Task<Void, Never>?
+    /// Stops a transposed save (Cancel, ⌘Q).
+    @ObservationIgnored private var saveCancel: SaveCancel?
     /// Counts the cancellations: the timeout counts only for the last one.
     @ObservationIgnored private var cancelCount = 0
     static let cancelTimeout = 5.0
@@ -282,6 +286,11 @@ import UniformTypeIdentifiers
         level = newLevel
     }
 
+    var transpose: Transpose { session.transpose }
+    func raiseTranspose() { send(session.setTranspose(session.transpose.raised())) }
+    func lowerTranspose() { send(session.setTranspose(session.transpose.lowered())) }
+    func setTranspose(_ value: Transpose) { send(session.setTranspose(value)) }
+
     func apply(_ preset: Preset) {
         soloMemory.forget()
         mix = mix.applying(preset)
@@ -302,10 +311,16 @@ import UniformTypeIdentifiers
     }
 
     /// Copies the stems (and the recording, if they come from there) into a new folder of `~/Music/Stelix`,
-    /// with the current date. The copy runs off the MainActor: 20 minutes are about 2.5 GB.
+    /// with the current date. The copy runs off the MainActor: 20 minutes are about 2.5 GB. With a transpose
+    /// the stems but the drums are transposed (the value when Save is pressed: it can change meanwhile), with
+    /// a progress bar and Cancel.
     func save() {
         guard session.canSave, !saving, let result = session.result, let source = session.source else { return }
         saving = true
+        let transpose = session.transpose
+        let cancel = SaveCancel()
+        saveCancel = cancel
+        saveProgress = transpose.isOff ? nil : 0
         let recording: URL?
         let sourceName: String?
         switch source {
@@ -323,29 +338,50 @@ import UniformTypeIdentifiers
         // Each saved stem says in its metadata that a model separated it, and which one.
         let provenance = StemProvenance(software: AppInfo.software,
                                         models: ModelCatalog.models(for: session.stemsLevel ?? level))
+        let progress: @Sendable (Double) -> Void = { [weak self] value in
+            Task { @MainActor in
+                guard let self, self.saveCancel === cancel, self.saveProgress != nil else { return }
+                self.saveProgress = max(self.saveProgress ?? 0, value)
+            }
+        }
         saveTask = Task { [weak self] in
-            let saved = await Task.detached(priority: .userInitiated) { () -> Result<URL, EngineFailure> in
+            let saved = await Task.detached(priority: .userInitiated) { () -> Result<URL, EngineFailure>? in
                 do {
                     return .success(try StemSaver.save(result, recording: recording, sourceName: sourceName, date: date,
                                                        names: { names[$0] ?? $0.fileName }, recordingName: recordingName,
-                                                       provenance: provenance))
+                                                       provenance: provenance, transpose: transpose,
+                                                       cancel: cancel, progress: progress))
+                } catch is CancellationError {
+                    return nil
                 } catch {
                     return .failure(EngineFailure(StemSaver.isOutOfSpace(error) ? .saveNoSpace : .saveFailed))
                 }
             }.value
             guard let self else { return }
             self.saving = false
+            self.saveProgress = nil
+            self.saveCancel = nil
+            // Cancelled: back to before Save, the folder is already gone.
+            guard let saved else { return }
             // Other stems have arrived in the meantime: these are no longer the ones to save.
             guard self.session.result == result else { return }
             switch saved {
-            case .success(let folder): self.session.markSaved(folder.path)
+            case .success(let folder): self.session.markSaved(folder.path, transpose: transpose)
             case .failure(let failure): self.session.fail(failure.message)
             }
         }
     }
 
-    /// Waits for Save to finish (⌘Q): quitting halfway would leave a partial folder in Music.
-    func finishSaving() async {
+    /// Stops a transposed save; its folder is deleted. A plain copy is short and is not stopped.
+    func cancelSave() {
+        guard saveProgress != nil else { return }
+        saveCancel?.cancel()
+    }
+
+    /// Waits for Save to finish: quitting halfway would leave a partial folder in Music. With
+    /// `cancellingTransposed` (⌘Q) a transposed save is cancelled instead, and its folder deleted.
+    func finishSaving(cancellingTransposed: Bool = false) async {
+        if cancellingTransposed { cancelSave() }
         await saveTask?.value
     }
 

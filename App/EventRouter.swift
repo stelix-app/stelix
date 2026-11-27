@@ -20,9 +20,9 @@ import StelixCore
         switch event {
         case .ready:
             break
-        case .live, .liveStats, .measuredDelay, .tempo:
+        case .live, .liveStats, .measuredDelay, .tempo, .key:
             live?.handle(event)
-        case .recording, .recorded, .job, .stemsReady, .player:
+        case .recording, .recorded, .job, .stemsReady, .player, .keyScan:
             studio?.handle(event)
         case .levels, .permissionSuspected:
             routeByMode(event)

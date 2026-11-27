@@ -29,6 +29,7 @@ final class OfflineSeparator: @unchecked Sendable {
     private let emit: @Sendable (Event) -> Void
     private let scratch: StudioScratch
     private let finished: @Sendable (StemsResult) -> Void
+    private let keys: KeyScans
     private let state = Mutex<JobState>(JobState())
     /// Only on the `queue` queue.
     private var model: DemucsMLXModel?
@@ -44,9 +45,10 @@ final class OfflineSeparator: @unchecked Sendable {
     }
 
     /// `finished` receives the ready stems (the player loads them) before `.stemsReady`.
-    init(scratch: StudioScratch, emit: @escaping @Sendable (Event) -> Void,
+    init(scratch: StudioScratch, keys: KeyScans, emit: @escaping @Sendable (Event) -> Void,
          finished: @escaping @Sendable (StemsResult) -> Void) {
         self.scratch = scratch
+        self.keys = keys
         self.emit = emit
         self.finished = finished
     }
@@ -70,6 +72,8 @@ final class OfflineSeparator: @unchecked Sendable {
             do {
                 // The folders no longer needed are deleted by the scratch, even after an error.
                 let folder = try scratch.folder(forSource: path)
+                // The key over the clip, alongside too; the stems never wait for it.
+                keys.jobStarted(path: path, folder: folder.path)
                 var result: StemsResult
                 if level == .base {
                     result = try run(url: url, into: folder)
@@ -80,12 +84,15 @@ final class OfflineSeparator: @unchecked Sendable {
                     engineLog(String(format: "studio: 6 stems %@ in %.1f s", level.rawValue, Date().timeIntervalSince(began)))
                 }
                 // Usually already done: a few seconds of analysis against tens of separation.
-                result.beats = tempo.wait()
+                let analysis = tempo.wait()
+                result.beats = analysis.beats
                 state.withLock { $0 = JobState() }
                 finished(result)
                 emit(.stemsReady(result))
+                keys.stemsReady(folder: result.folder)
             } catch {
                 tempo.cancel()
+                keys.jobEnded(path: path)
                 let cancelled = state.withLock { state -> Bool in
                     defer { state = JobState() }
                     return state.cancelled

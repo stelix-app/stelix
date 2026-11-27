@@ -47,10 +47,15 @@ struct LiveView: View {
                             onVolume: { live.setVolume(stem, $0) })
                     }
                 }
-                // Directly under the last stem, on the left (Gabriele, 13/11). Only where the analysis exists.
-                if #available(macOS 27, *) {
-                    TempoLabel(bpm: phase == .running ? live.tempo : nil)
-                }
+                // Directly under the last stem (Gabriele, 13/11): tempo and key on the left where the analysis
+                // exists, the transpose on the right everywhere.
+                MusicRow(bpm: phase == .running ? live.tempo : nil,
+                         key: phase == .running ? live.key?.transposed(by: live.transpose.semitones) : nil,
+                         showsAnalysis: MusicRow.analysisAvailable,
+                         transpose: live.transpose,
+                         onRaise: { live.raiseTranspose() },
+                         onLower: { live.lowerTranspose() },
+                         onSet: { live.setTranspose($0) })
                 SoloHint()
             }
 

@@ -26,5 +26,11 @@ public enum Command: Codable, Sendable, Equatable {
     /// Telemetry on only while the panel is open.
     case setTelemetry(Bool)
     case debugMeasureDelay
+    /// The transpose, from -12 to +12 (`Transpose.range`); 0 is off. Live and Studio never live in the same
+    /// engine: like `setMix`, the one that is active takes it.
+    case setTranspose(semitones: Int)
+    /// A new Studio engine goes on with the key windows of the stems in `folder` that `done` does not have,
+    /// from their source at `path` (`KeyScan`).
+    case scanKeys(path: String, folder: String, done: KeyScan?)
     case shutdown
 }

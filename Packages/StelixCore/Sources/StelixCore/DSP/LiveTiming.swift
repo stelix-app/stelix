@@ -89,6 +89,12 @@ public struct LiveTiming: Equatable, Sendable {
 
     public var delaySeconds: Double { Double(delayFrames) / deviceRate }
 
+    /// The delay the measurement should find: the fixed one plus `extraFrames`, the time pitch's latency
+    /// while the Live is transposed (0 otherwise).
+    public func expectedDelaySeconds(extraFrames: Int) -> Double {
+        Double(delayFrames + extraFrames) / deviceRate
+    }
+
     /// Seconds beyond the delay that the timeline can lag behind the ring before giving up.
     public static let modelStallSeconds = 3.0
 

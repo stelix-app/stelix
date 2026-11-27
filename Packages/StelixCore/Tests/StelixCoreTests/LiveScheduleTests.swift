@@ -103,4 +103,12 @@ struct LiveScheduleTests {
         #expect(stretched.playing)
         #expect(stretched.underruns == 0)
     }
+
+    /// What the delay measurement should find: the fixed delay, plus the time pitch's latency while the
+    /// Live is transposed (the drums wait for it too).
+    @Test func expectedDelayIncludesTheTransposeLatency() {
+        let timing = LiveTiming(level: .intermediate, deviceRate: 48_000)
+        #expect(timing.expectedDelaySeconds(extraFrames: 0) == 1.0)
+        #expect(abs(timing.expectedDelaySeconds(extraFrames: 4096) - (1.0 + 4096.0 / 48_000)) < 1e-9)
+    }
 }

@@ -746,4 +746,283 @@ struct StudioSessionTests {
         _ = session.handle(.player(position: 0, duration: 10, playing: false), level: .base)
         #expect(!session.playing)
     }
+
+    // MARK: Transpose
+
+    @Test func transposeStartsOff() {
+        #expect(StudioSession().transpose == .off)
+    }
+
+    @Test func setTransposeWithoutStemsDoesNothing() {
+        var session = StudioSession()
+        session.setTranspose(Transpose(semitones: 3))
+        #expect(session.transpose == .off)
+    }
+
+    @Test func transposeIsKeptWhileTheClipIsOpen() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        _ = session.togglePlayback()
+        _ = session.rewind()
+        session.markSaved("/m/x")
+        #expect(session.transpose.semitones == 3)
+    }
+
+    /// A new clip: back to 0 when its stems arrive. While it separates the old stems play on, transposed.
+    @Test func newFileResetsTransposeWhenItsStemsArrive() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        _ = session.load(path: "/m/b.mp3", level: .base)
+        #expect(session.transpose.semitones == 3)
+        _ = session.handle(.stemsReady(Self.result("/m/b")), level: .base)
+        #expect(session.transpose == .off)
+    }
+
+    /// Choose file on the same file again is a new clip too.
+    @Test func sameFileLoadedAgainResetsTranspose() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: -5))
+        _ = session.load(path: "/m/a.mp3", level: .base)
+        _ = session.handle(.stemsReady(Self.result()), level: .base)
+        #expect(session.transpose == .off)
+    }
+
+    @Test func recordingResetsTranspose() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        _ = session.record()
+        _ = session.handle(.recording(seconds: 5, peaks: []), level: .base)
+        _ = session.stop()
+        _ = session.handle(.recorded(path: "/m/r.wav"), level: .base)
+        _ = session.handle(.stemsReady(Self.result("/m/r")), level: .base)
+        #expect(session.transpose == .off)
+    }
+
+    /// Cancel brings back the previous stems, with their transpose.
+    @Test func cancelledNewClipKeepsTranspose() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        _ = session.load(path: "/m/b.mp3", level: .base)
+        _ = session.cancel()
+        #expect(session.transpose.semitones == 3)
+    }
+
+    @Test func changeModelKeepsTranspose() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        _ = session.changeModel(to: .intermediate)
+        _ = session.handle(.stemsReady(Self.result("/m/a-int")), level: .base)
+        #expect(session.transpose.semitones == 3)
+    }
+
+    @Test func lostStemsResetTranspose() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        _ = session.handle(.failure(EngineFailure(.noStems)), level: .base)
+        #expect(session.transpose == .off)
+    }
+
+    /// Record and Choose file refused while Change model runs do not mark a new clip.
+    @Test func refusedNewClipDuringChangeModelKeepsTranspose() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        _ = session.changeModel(to: .intermediate)
+        #expect(session.record().isEmpty)
+        #expect(session.load(path: "/m/b.mp3", level: .base).isEmpty)
+        _ = session.handle(.stemsReady(Self.result("/m/a-int")), level: .base)
+        #expect(session.transpose.semitones == 3)
+    }
+
+    @Test func retryOfAFailedNewClipResetsTranspose() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        _ = session.load(path: "/m/b.mp3", level: .base)
+        _ = session.handle(.failure(EngineFailure(.separationFailed)), level: .base)
+        #expect(!session.retry(level: .base).isEmpty)
+        _ = session.handle(.stemsReady(Self.result("/m/b")), level: .base)
+        #expect(session.transpose == .off)
+    }
+
+    @Test func retryOfAFailedChangeModelKeepsTranspose() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        _ = session.changeModel(to: .intermediate)
+        _ = session.handle(.failure(EngineFailure(.separationFailed)), level: .base)
+        #expect(!session.retry(level: .base).isEmpty)
+        _ = session.handle(.stemsReady(Self.result("/m/a-int")), level: .base)
+        #expect(session.transpose.semitones == 3)
+    }
+
+    /// Leaving the Studio and coming back to the same stems keeps the transpose.
+    @Test func leavingTheStudioKeepsTranspose() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: -5))
+        session.engineStopped()
+        _ = session.startCommands(mix: Self.mix, telemetry: false)
+        #expect(session.transpose.semitones == -5)
+    }
+
+    @Test func unreadableStemsResetTranspose() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        _ = session.handle(.failure(EngineFailure(.stemUnreadable)), level: .base)
+        #expect(session.transpose == .off)
+    }
+
+    @Test func setTransposeSendsTheCommand() {
+        var session = Self.ready()
+        #expect(session.setTranspose(Transpose(semitones: 3)) == [.setTranspose(semitones: 3)])
+        #expect(session.setTranspose(Transpose(semitones: 3)) == [])
+    }
+
+    @Test func setTransposeWaitsForTheEngine() {
+        var session = Self.ready()
+        session.engineStopped()
+        #expect(session.setTranspose(Transpose(semitones: 3)) == [])
+        #expect(session.transpose.semitones == 3)
+    }
+
+    // MARK: Transpose and the Studio engine (Task 11.5)
+
+    @Test func savedFolderFollowsTheTranspose() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        session.markSaved("/m/a +3 st")
+        #expect(!session.canSave)
+        session.setTranspose(Transpose(semitones: 5))
+        #expect(session.canSave && session.savedFolder == nil)
+        session.setTranspose(Transpose(semitones: 3))
+        #expect(session.savedFolder == "/m/a +3 st")
+    }
+
+    @Test func markSavedUsesTheValueTheSaveStartedWith() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 5))
+        session.markSaved("/m/a +3 st", transpose: Transpose(semitones: 3))
+        #expect(session.savedFolder == nil)
+        session.setTranspose(Transpose(semitones: 3))
+        #expect(session.savedFolder == "/m/a +3 st")
+    }
+
+    @Test func newStemsForgetTheSavedFolders() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        session.markSaved("/m/a +3 st")
+        _ = session.changeModel(to: .intermediate)
+        _ = session.handle(.stemsReady(Self.result("/m/a-int")), level: .base)
+        #expect(session.savedFolder == nil)
+    }
+
+    @Test func startCommandsCarryTheTranspose() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        session.engineStopped()
+        #expect(session.startCommands(mix: Self.mix, telemetry: false).last == .setTranspose(semitones: 3))
+    }
+
+    @Test func startCommandsAtZeroHaveNoTranspose() {
+        var session = Self.ready()
+        session.engineStopped()
+        #expect(!session.startCommands(mix: Self.mix, telemetry: false).contains { command in
+            if case .setTranspose = command { return true }
+            return false
+        })
+    }
+
+    @Test func changeModelSendsTheKeptTranspose() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        _ = session.changeModel(to: .intermediate)
+        #expect(session.handle(.stemsReady(Self.result("/m/a-int")), level: .base) == [.setTranspose(semitones: 3)])
+    }
+
+    @Test func newClipStemsSendNothing() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        _ = session.load(path: "/m/b.mp3", level: .base)
+        #expect(session.handle(.stemsReady(Self.result("/m/b")), level: .base) == [])
+        #expect(session.transpose == .off)
+    }
+
+    // MARK: Key over the clip
+
+    private static let am = MusicalKey(pitchClass: 9, mode: .minor)
+
+    /// A clip of 60 s: eleven windows.
+    private static func longReady() -> StudioSession {
+        var session = StudioSession()
+        _ = session.load(path: "/m/a.mp3", level: .base)
+        var long = result()
+        long.duration = 60
+        _ = session.handle(.stemsReady(long), level: .base)
+        return session
+    }
+
+    private static func scan(_ count: Int) -> KeyScan {
+        KeyScan(duration: 60, windows: (0..<count).map { KeyWindow(index: $0, key: am) })
+    }
+
+    @Test func keyScanReachesTheShownStems() {
+        var session = Self.longReady()
+        #expect(session.handle(.keyScan(folder: "/m/a", Self.scan(4)), level: .base).isEmpty)
+        #expect(session.result?.keyScan == Self.scan(4))
+        guard case .ready(let shown) = session.stage else { Issue.record("not ready"); return }
+        #expect(shown.keyScan == Self.scan(4))
+    }
+
+    /// A scan of other stems (a clip already replaced) is not taken.
+    @Test func keyScanOfAnotherFolderIsIgnored() {
+        var session = Self.longReady()
+        _ = session.handle(.keyScan(folder: "/m/b", Self.scan(4)), level: .base)
+        #expect(session.result?.keyScan == nil)
+    }
+
+    /// Change Model on the same clip: the new stems keep the key found so far until the engine sends it again.
+    @Test func newStemsOfTheSameFolderKeepTheScan() {
+        var session = Self.longReady()
+        _ = session.handle(.keyScan(folder: "/m/a", Self.scan(4)), level: .base)
+        _ = session.changeModel(to: .intermediate)
+        var again = Self.result()
+        again.duration = 60
+        _ = session.handle(.stemsReady(again), level: .base)
+        #expect(session.result?.keyScan == Self.scan(4))
+    }
+
+    @Test func newStemsOfAnotherFolderStartWithoutAScan() {
+        var session = Self.longReady()
+        _ = session.handle(.keyScan(folder: "/m/a", Self.scan(4)), level: .base)
+        _ = session.load(path: "/m/b.mp3", level: .base)
+        var other = Self.result("/m/b")
+        other.duration = 60
+        _ = session.handle(.stemsReady(other), level: .base)
+        #expect(session.result?.keyScan == nil)
+    }
+
+    /// A new Studio engine goes on with the windows still missing, from the clip's source.
+    @Test func startCommandsResumeAnUnfinishedScan() {
+        var session = Self.longReady()
+        _ = session.handle(.keyScan(folder: "/m/a", Self.scan(4)), level: .base)
+        session.engineStopped()
+        let commands = session.startCommands(mix: Self.mix, telemetry: false)
+        #expect(commands.last == .scanKeys(path: "/m/a.mp3", folder: "/m/a", done: Self.scan(4)))
+    }
+
+    @Test func startCommandsStartAScanThatNeverCame() {
+        var session = Self.longReady()
+        session.engineStopped()
+        #expect(session.startCommands(mix: Self.mix, telemetry: false).last
+                == .scanKeys(path: "/m/a.mp3", folder: "/m/a", done: nil))
+    }
+
+    @Test func startCommandsLeaveAFinishedScan() {
+        var session = Self.longReady()
+        var finished = Self.scan(11)
+        finished.setTrackKey(Self.am)
+        _ = session.handle(.keyScan(folder: "/m/a", finished), level: .base)
+        session.engineStopped()
+        #expect(!session.startCommands(mix: Self.mix, telemetry: false).contains {
+            if case .scanKeys = $0 { return true }
+            return false
+        })
+    }
 }

@@ -87,6 +87,51 @@ enum Copy {
         return String(localized: "tempo.accessibility", defaultValue: "\(number) beats per minute")
     }
 
+    static var keyUnknown: String { String(localized: "key.unknown", defaultValue: "Key not detected") }
+
+    /// "Key: Cm" (English), "Tonalità: Cm" (Italian), `nil` → "Key: —", like the BPM (Gabriele, 26/11).
+    /// The key's name is the same in every language.
+    static func key(_ key: MusicalKey?) -> String {
+        let name = key?.name ?? noValue
+        return String(localized: "key.label", defaultValue: "Key: \(name)")
+    }
+
+    /// For VoiceOver: "Key: F minor", or "Key not detected".
+    static func keySpoken(_ key: MusicalKey?) -> String {
+        guard let key else { return keyUnknown }
+        let tonic = key.tonicName
+        switch key.mode {
+        case .major: return String(localized: "key.spoken.major", defaultValue: "Key: \(tonic) major")
+        case .minor: return String(localized: "key.spoken.minor", defaultValue: "Key: \(tonic) minor")
+        }
+    }
+
+    static var transpose: String { String(localized: "transpose.label", defaultValue: "Transpose") }
+
+    /// In place of "Transpose" after a value the field refuses (Gabriele, 26/11).
+    static var transposeRange: String {
+        String(localized: "transpose.range", defaultValue: "From −12 to +12")
+    }
+
+    /// "+3 st", "−5 st" (with the minus sign, U+2212), "0 st": the same in every language.
+    static func transposeValue(_ transpose: Transpose) -> String {
+        let n = transpose.semitones
+        return (n > 0 ? "+\(n)" : n < 0 ? "\u{2212}\(-n)" : "0") + " st"
+    }
+
+    /// For VoiceOver: "3 semitones up", "1 semitone down", "No transpose".
+    static func transposeSpoken(_ transpose: Transpose) -> String {
+        let n = transpose.semitones
+        let count = String(abs(n))
+        switch n {
+        case 0: return String(localized: "transpose.spoken.off", defaultValue: "No transpose")
+        case 1: return String(localized: "transpose.spoken.up.one", defaultValue: "1 semitone up")
+        case -1: return String(localized: "transpose.spoken.down.one", defaultValue: "1 semitone down")
+        case 2...: return String(localized: "transpose.spoken.up", defaultValue: "\(count) semitones up")
+        default: return String(localized: "transpose.spoken.down", defaultValue: "\(count) semitones down")
+        }
+    }
+
     private static func oneDecimal(_ value: Double) -> String {
         value.formatted(.number.precision(.fractionLength(1)))
     }
@@ -139,7 +184,7 @@ enum Copy {
         value.formatted(.number)
     }
 
-    /// "2026-11-08 15.30 Man I Need" → "Saved in Music › Stelix › 2026-11-08 15.30 Man I Need"
+    /// "2026-11-08 15.30 Song" → "Saved in Music › Stelix › 2026-11-08 15.30 Song"
     static func savedIn(_ folder: String) -> String {
         String(localized: "studio.savedIn", defaultValue: "Saved in Music › Stelix › \(folder)")
     }

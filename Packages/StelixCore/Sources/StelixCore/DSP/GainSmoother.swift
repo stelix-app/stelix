@@ -117,4 +117,44 @@ public struct StemMixer: @unchecked Sendable {
             }
         }
     }
+
+    /// Like `render`, without the master, for the transposed Live: the `splitStem` stem (the drums) into
+    /// `split`, the others summed into `rest`, both stereo interleaved, with the stem gains and the gap
+    /// guard. `finish` applies the master on the sum and maps it on the output channels.
+    public func renderSplit(stemFrames: UnsafePointer<Float>, frames: Int, channels: Int, splitStem: Int,
+                            split: UnsafeMutablePointer<Float>, rest: UnsafeMutablePointer<Float>) {
+        let stemStride = frames * channels
+        let mapped = min(channels, 2)
+        gainRefs.withUnsafeBufferPointer { gains in
+            for f in 0..<frames {
+                let m = gap.next()
+                let splitOut = split + f * 2, restOut = rest + f * 2
+                splitOut[0] = 0; splitOut[1] = 0
+                restOut[0] = 0; restOut[1] = 0
+                for s in 0..<gains.count {
+                    let g = gains[s]._withUnsafeGuaranteedRef { $0.next() } * m
+                    let src = stemFrames + s * stemStride + f * channels
+                    let target = s == splitStem ? splitOut : restOut
+                    for c in 0..<mapped { target[c] += g * src[c] }
+                }
+            }
+        }
+    }
+
+    /// The end of `render` for a stereo interleaved `sum`: the master, then the output channels
+    /// (stereo on the first two, the others at 0; the channel average on a mono output).
+    public func finish(_ sum: UnsafePointer<Float>, frames: Int, out: UnsafeMutablePointer<Float>, outChannels: Int) {
+        for f in 0..<frames {
+            let m = master.next()
+            let frameOut = out + f * outChannels
+            let left = sum[f * 2], right = sum[f * 2 + 1]
+            if outChannels == 1 {
+                frameOut[0] = m * (left + right) / 2
+                continue
+            }
+            frameOut[0] = m * left
+            frameOut[1] = m * right
+            for c in 2..<max(2, outChannels) { frameOut[c] = 0 }
+        }
+    }
 }

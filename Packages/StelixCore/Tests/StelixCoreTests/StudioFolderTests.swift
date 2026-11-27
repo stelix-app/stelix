@@ -73,6 +73,22 @@ struct StudioFolderTests {
         #expect(first.hasPrefix("2026-11-07 13.05 èèè"))
         #expect(first.allSatisfy { $0 == "è" || !$0.isLetter })
         #expect(second == first + " 2")
+        // The transpose suffix still fits under NAME_MAX.
+        let transposed = try StudioFolder.make(root: root, date: date, sourceName: long, transpose: Transpose(semitones: -12)).lastPathComponent
+        #expect(transposed.hasSuffix(" -12 st"))
+        #expect(transposed.decomposedStringWithCanonicalMapping.utf8.count <= 230)
+    }
+
+    @Test func transposedFolderHasTheSemitones() throws {
+        let root = Self.tempRoot()
+        defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
+        let date = Self.date(2026, 11, 7, 13, 5)
+        let up = try StudioFolder.make(root: root, date: date, sourceName: "Song.mp3", transpose: Transpose(semitones: 3))
+        let again = try StudioFolder.make(root: root, date: date, sourceName: "Song.mp3", transpose: Transpose(semitones: 3))
+        let down = try StudioFolder.make(root: root, date: date, sourceName: nil, transpose: Transpose(semitones: -5))
+        #expect(up.lastPathComponent == "2026-11-07 13.05 Song +3 st")
+        #expect(again.lastPathComponent == "2026-11-07 13.05 Song +3 st 2")
+        #expect(down.lastPathComponent == "2026-11-07 13.05 -5 st")
     }
 
     @Test func unwritableRootThrowsFolderFailure() throws {
