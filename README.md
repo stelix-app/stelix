@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/hero.png" alt="Three Stelix panels. Original: Stelix is asleep and the Mac sounds as usual. Live: the Intermediate model, 1.00 seconds behind, four stems with their volume sliders. Studio: a recording separated at the Pro level into six stems, each with its slider and waveform.">
+  <img src="assets/hero.png" alt="Three Stelix panels. Original: Stelix is asleep and the Mac sounds as usual. Live: the Intermediate model, 0.98 seconds behind, four stems with their volume sliders, the BPM, the key and the transpose. Studio: a recording separated at the Pro level into six stems, each with its slider and waveform, with the same BPM, key and transpose.">
 </p>
 
 Stelix is an **always-ready** menu bar app for Apple silicon Mac computers that splits the audio of your Mac into stems: vocals, drums, bass and the rest. It does it **live**, while the music plays, or from a recording or a file, with higher quality and six stems.
@@ -28,7 +28,8 @@ Stelix is an **always-ready** menu bar app for Apple silicon Mac computers that 
 
 - 🎚️ **Live.** Whatever your Mac plays, split into 4 stems (vocals, drums, bass, other), about one second behind on a fast Mac. Turn each stem up or down, hold one to hear it alone, or pick a preset such as "Vocals Only". Works with any app, with no audio driver to install.
 - 🎛️ **Studio.** Record what your Mac plays, or drop an audio file, and get 6 stems (vocals, drums, bass, guitar, piano, other). Play them in the built-in player and save them as WAV files in `~/Music/Stelix`.
-- 🥁 **BPM.** On macOS 27 and later, Live and Studio show the tempo under the stems, and it follows the song when the tempo changes. It comes from Apple's on-device Music Understanding framework, so earlier versions of macOS don't show it.
+- 🎼 **Transpose.** Move Live and Studio up or down by up to 12 semitones, while the drums stay as they are. In Live it adds about 0.1 seconds to the delay. In Studio, the "Save" button writes the transposed stems to a separate folder.
+- 🥁 **BPM and key.** On macOS 27 and later, Live and Studio show the tempo and the key under the stems, and both follow the song when they change. The key follows the transpose too. They come from Apple's on-device Music Understanding framework, so earlier versions of macOS don't show them.
 - 🌙 **Original.** The app sleeps and your Mac sounds as usual: no background process, 0% CPU, about 20 MB of memory (about 40 MB after an hour of Live). The separation engine runs only while you are in Live or Studio.
 - 🔒 **On your Mac.** Everything runs on your Mac. Audio never leaves it.
 
@@ -77,8 +78,8 @@ xattr -dr com.apple.quarantine /Applications/Stelix.app
 
 ### 🔄 Updating
 
-- Once a day Stelix checks this repository's latest release, and the panel tells you when there is a newer version. "Check Now" in the settings checks at once.
-- **Download…** shows the version, its date and the release notes, then saves the DMG in your Downloads folder. First Stelix checks that the app inside is the announced version, signed with the same certificate as yours; if not, it deletes the file.
+- Once a day Stelix checks this repository's latest release. When there is a newer version, a window opens with what's new, in the app's language. "Check Now" in the settings checks at once.
+- **Download** saves the DMG in your Downloads folder. First Stelix checks that the app inside is the announced version, signed with the same certificate as yours; if not, it deletes the file. **Later** asks again in two days, **Skip This Version** waits for the next one; the settings show the new version anyway.
 - Quit Stelix, open the DMG and drag the new Stelix to Applications, choosing Replace. Your models, settings and audio permission stay.
 
 You can also download the DMG from [Releases](https://github.com/stelix-app/stelix/releases) yourself, as for the first install.
@@ -108,6 +109,7 @@ Measured on a MacBook Pro M3 Max (30 GPU cores, 36 GB of memory) on macOS 27:
 - So far tested only on macOS 27: macOS 15 and 26 are supported, but untested.
 - On the Macs not tried yet, Live may have more delay than on the M3 Max, and Pro may not start (see [Performance](#-performance)).
 - The BPM can be half, double or one and a half times the tempo you would tap, as with any tempo detector, and on speech or noise it may show a number anyway. In Live it is the tempo around what you are hearing, updated every 4 seconds, only while the panel is open.
+- The key is right on most songs. On very complex music, such as songs that move between keys or use unusual harmony, it can be wrong: for example it may show the relative minor (Cm) instead of the major key (E♭). When Stelix is not sure, it shows "—".
 - Some apps write WAV files whose length field is left empty while recording: those cannot be opened. Save them again with any audio editor.
 
 ## 🧠 Models
