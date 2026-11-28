@@ -84,7 +84,7 @@ struct StemTransposerTests {
 
     // MARK: Speed (Task 12.1)
 
-    @Test(arguments: [50, 75, 125])
+    @Test(arguments: [50, 75, 125, 150])
     func lengthAtSpeed(percent: Int) throws {
         let input = [Float](repeating: 0.1, count: 88_200 * 2)
         let expected = Int((88_200 / Speed(percent: percent).factor).rounded())
@@ -92,7 +92,7 @@ struct StemTransposerTests {
     }
 
     /// The time pitch's reported latency is off by up to about 11 ms (measured in the player): within 15 ms.
-    @Test(arguments: [50, 125], [0, 3])
+    @Test(arguments: [50, 150], [0, 3])
     func clickLandsAtTheStretchedFrame(percent: Int, semitones: Int) throws {
         let input = AudioTestSignals.click(frames: Int(TestWAV.rate * 2), at: Int(TestWAV.rate), rate: TestWAV.rate)
         let output = try Self.transpose(input, semitones: semitones, speed: Speed(percent: percent))

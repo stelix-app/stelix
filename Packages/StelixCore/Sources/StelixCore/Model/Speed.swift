@@ -3,10 +3,10 @@
 
 import Foundation
 
-/// How fast the Studio plays, in percent, from 50 to 125; 100 is the track as it is. The pitch never
+/// How fast the Studio plays, in percent, from 50 to 150; 100 is the track as it is. The pitch never
 /// changes with it (time stretch, not tape). At 100 the audio does not go through a time pitch for it.
 public struct Speed: Sendable, Equatable, Hashable {
-    public static let range: ClosedRange<Int> = 50...125
+    public static let range: ClosedRange<Int> = 50...150
     /// What one arrow moves; the arrows snap to multiples of it.
     public static let step = 5
     public static let normal = Speed(percent: 100)
@@ -35,7 +35,7 @@ public struct Speed: Sendable, Equatable, Hashable {
     /// The rate of the time pitch: 0.75 at 75%.
     public var factor: Double { Double(percent) / 100 }
 
-    /// The next multiple of `step` above; stays at 125.
+    /// The next multiple of `step` above; stays at 150.
     public func raised() -> Speed { Speed(percent: (percent / Self.step + 1) * Self.step) }
 
     /// The next multiple of `step` below; stays at 50.

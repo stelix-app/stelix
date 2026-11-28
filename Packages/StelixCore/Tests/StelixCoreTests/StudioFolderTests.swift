@@ -114,8 +114,8 @@ struct StudioFolderTests {
         defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
         let long = String(repeating: "è", count: 300) + ".mp3"
         let name = try StudioFolder.make(root: root, date: Self.date(2026, 11, 7, 13, 5), sourceName: long,
-                                         transpose: Transpose(semitones: -12), speed: Speed(percent: 125)).lastPathComponent
-        #expect(name.hasSuffix(" -12 st 125%"))
+                                         transpose: Transpose(semitones: -12), speed: Speed(percent: 150)).lastPathComponent
+        #expect(name.hasSuffix(" -12 st 150%"))
         #expect(name.decomposedStringWithCanonicalMapping.utf8.count <= 240)
     }
 

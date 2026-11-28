@@ -172,7 +172,7 @@ struct StudioGraphTests {
 
     /// Vocals and drums, the same click at 0.5 s of the file, one at a time, in slices as small as a real
     /// output's: they come out together, at the stretched time after the start delay.
-    @Test(arguments: [50, 75, 125], [0, 3])
+    @Test(arguments: [50, 75, 125, 150], [0, 3])
     func drumsAlignWithTheRestAtSpeed(percent: Int, semitones: Int) throws {
         let frames = Int(Self.rate) * 3
         let click = AudioTestSignals.click(frames: frames, at: Int(Self.rate / 2), rate: Self.rate)
@@ -218,7 +218,7 @@ struct StudioGraphTests {
     }
 
     /// The clock counts file frames: after a second of output, about (a second − the start delay) × speed.
-    @Test(arguments: [50, 125])
+    @Test(arguments: [50, 150])
     func clockNodeCountsFileFramesAtSpeed(percent: Int) throws {
         let fixture = try Fixture(vocals: Self.constant(0.1), drums: Self.constant(0.2))
         let speed = Speed(percent: percent)

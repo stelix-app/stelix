@@ -53,7 +53,7 @@ public enum StudioFolder {
         stem = stem.replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")
         // NAME_MAX is 255 bytes: with the date (17), the transpose and speed suffixes (at most 12,
-        // " -12 st 125%") and a " N" about 220 bytes remain; the source is kept under 200, in whole characters, counted in the
+        // " -12 st 150%") and a " N" about 220 bytes remain; the source is kept under 200, in whole characters, counted in the
         // decomposed form that reaches the file system.
         while stem.decomposedStringWithCanonicalMapping.utf8.count > maxSourceBytes { stem.removeLast() }
         return stem.trimmingCharacters(in: .whitespaces)
