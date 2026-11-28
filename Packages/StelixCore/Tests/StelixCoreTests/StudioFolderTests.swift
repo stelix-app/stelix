@@ -91,6 +91,34 @@ struct StudioFolderTests {
         #expect(down.lastPathComponent == "2026-11-07 13.05 -5 st")
     }
 
+    /// The speed goes after the semitones (Gabriele, 28/11), before any " 2"; nothing at 100%.
+    @Test func speedSuffixComesAfterTheSemitones() throws {
+        let root = Self.tempRoot()
+        defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
+        let date = Self.date(2026, 11, 7, 13, 5)
+        let both = try StudioFolder.make(root: root, date: date, sourceName: "Clip.m4a",
+                                         transpose: Transpose(semitones: 3), speed: Speed(percent: 75))
+        let again = try StudioFolder.make(root: root, date: date, sourceName: "Clip.m4a",
+                                          transpose: Transpose(semitones: 3), speed: Speed(percent: 75))
+        let slow = try StudioFolder.make(root: root, date: date, sourceName: "Clip.m4a", speed: Speed(percent: 75))
+        let normal = try StudioFolder.make(root: root, date: date, sourceName: "Other.m4a", speed: .normal)
+        #expect(both.lastPathComponent == "2026-11-07 13.05 Clip +3 st 75%")
+        #expect(again.lastPathComponent == "2026-11-07 13.05 Clip +3 st 75% 2")
+        #expect(slow.lastPathComponent == "2026-11-07 13.05 Clip 75%")
+        #expect(normal.lastPathComponent == "2026-11-07 13.05 Other")
+    }
+
+    /// The longest suffixes still fit under NAME_MAX, with room for " 2".
+    @Test func longestSuffixesFitUnderNameMax() throws {
+        let root = Self.tempRoot()
+        defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
+        let long = String(repeating: "è", count: 300) + ".mp3"
+        let name = try StudioFolder.make(root: root, date: Self.date(2026, 11, 7, 13, 5), sourceName: long,
+                                         transpose: Transpose(semitones: -12), speed: Speed(percent: 125)).lastPathComponent
+        #expect(name.hasSuffix(" -12 st 125%"))
+        #expect(name.decomposedStringWithCanonicalMapping.utf8.count <= 240)
+    }
+
     @Test func unwritableRootThrowsFolderFailure() throws {
         // The root sits under a file: the folder cannot be created.
         let base = FileManager.default.temporaryDirectory.appending(path: "StudioFolderTests-\(UUID().uuidString)")

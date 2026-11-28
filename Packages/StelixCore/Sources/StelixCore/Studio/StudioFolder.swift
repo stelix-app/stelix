@@ -9,10 +9,10 @@ public enum StudioFolder {
     public static let defaultRoot: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Music/Stelix")
 
     /// Creates the folder and returns it. `sourceName` is the name of the loaded file: the
-    /// extension is removed and "/" and ":" become "-". A transpose adds " +3 st" after it, before
-    /// any " 2". If it cannot be created: `EngineFailure` "folder".
+    /// extension is removed and "/" and ":" become "-". A transpose adds " +3 st" after it, a speed
+    /// " 75%" after that, before any " 2". If it cannot be created: `EngineFailure` "folder".
     public static func make(root: URL = defaultRoot, date: Date, sourceName: String?,
-                            transpose: Transpose = .off) throws(EngineFailure) -> URL {
+                            transpose: Transpose = .off, speed: Speed = .normal) throws(EngineFailure) -> URL {
         let failure = EngineFailure(.musicFolder)
         let fileManager = FileManager.default
         do { try fileManager.createDirectory(at: root, withIntermediateDirectories: true) } catch { throw failure }
@@ -21,7 +21,7 @@ public enum StudioFolder {
         if let source = sourceName.map(sanitized), !source.isEmpty {
             base += " " + source
         }
-        base += transpose.folderSuffix
+        base += transpose.folderSuffix + speed.folderSuffix
         var index = 1
         while true {
             let folder = root.appending(path: index == 1 ? base : "\(base) \(index)", directoryHint: .isDirectory)
@@ -52,8 +52,8 @@ public enum StudioFolder {
         }
         stem = stem.replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")
-        // NAME_MAX is 255 bytes: with the date (17), a transpose suffix (at most 7, " -12 st") and a " N"
-        // about 225 bytes remain; the source is kept under 200, in whole characters, counted in the
+        // NAME_MAX is 255 bytes: with the date (17), the transpose and speed suffixes (at most 12,
+        // " -12 st 125%") and a " N" about 220 bytes remain; the source is kept under 200, in whole characters, counted in the
         // decomposed form that reaches the file system.
         while stem.decomposedStringWithCanonicalMapping.utf8.count > maxSourceBytes { stem.removeLast() }
         return stem.trimmingCharacters(in: .whitespaces)

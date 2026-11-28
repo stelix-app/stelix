@@ -944,6 +944,107 @@ struct StudioSessionTests {
         #expect(session.transpose == .off)
     }
 
+    // MARK: Speed (Task 12.1)
+
+    @Test func setSpeedSendsTheCommand() {
+        var session = Self.ready()
+        #expect(session.speed == .normal)
+        #expect(session.setSpeed(Speed(percent: 75)) == [.setSpeed(percent: 75)])
+        #expect(session.setSpeed(Speed(percent: 75)) == [])
+        var empty = StudioSession()
+        #expect(empty.setSpeed(Speed(percent: 75)) == [])
+        #expect(empty.speed == .normal)
+    }
+
+    @Test func setSpeedWaitsForTheEngine() {
+        var session = Self.ready()
+        session.engineStopped()
+        #expect(session.setSpeed(Speed(percent: 75)) == [])
+        #expect(session.speed.percent == 75)
+    }
+
+    /// Change Model keeps the speed and sends it again, after the transpose; a new clip goes back to 100%.
+    @Test func speedFollowsTheStems() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        session.setSpeed(Speed(percent: 75))
+        _ = session.changeModel(to: .intermediate)
+        #expect(session.handle(.stemsReady(Self.result("/m/a-int")), level: .base)
+            == [.setTranspose(semitones: 3), .setSpeed(percent: 75)])
+        #expect(session.speed.percent == 75)
+        _ = session.load(path: "/m/b.mp3", level: .base)
+        #expect(session.speed.percent == 75)
+        #expect(session.handle(.stemsReady(Self.result("/m/b")), level: .base) == [])
+        #expect(session.speed == .normal)
+    }
+
+    @Test func changeModelSendsOnlyTheSpeedWithoutTranspose() {
+        var session = Self.ready()
+        session.setSpeed(Speed(percent: 60))
+        _ = session.changeModel(to: .intermediate)
+        #expect(session.handle(.stemsReady(Self.result("/m/a-int")), level: .base) == [.setSpeed(percent: 60)])
+    }
+
+    @Test func startCommandsCarrySpeed() throws {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        session.setSpeed(Speed(percent: 75))
+        session.engineStopped()
+        _ = session.play()
+        let commands = session.startCommands(mix: Self.mix, telemetry: false)
+        let transpose = try #require(commands.firstIndex(of: .setTranspose(semitones: 3)))
+        let speed = try #require(commands.firstIndex(of: .setSpeed(percent: 75)))
+        let play = try #require(commands.firstIndex(of: .player(.play)))
+        #expect(transpose < speed && speed < play)
+    }
+
+    @Test func startCommandsAtNormalSpeedHaveNoSpeed() {
+        var session = Self.ready()
+        session.engineStopped()
+        #expect(!session.startCommands(mix: Self.mix, telemetry: false).contains { command in
+            if case .setSpeed = command { return true }
+            return false
+        })
+    }
+
+    @Test func otherSpeedIsAnotherSave() {
+        var session = Self.ready()
+        session.setTranspose(Transpose(semitones: 3))
+        session.markSaved("/m/a +3 st", transpose: Transpose(semitones: 3), speed: .normal)
+        #expect(!session.canSave)
+        session.setSpeed(Speed(percent: 75))
+        #expect(session.canSave && session.savedFolder == nil)
+        session.markSaved("/m/a +3 st 75%")
+        session.setSpeed(.normal)
+        #expect(session.savedFolder == "/m/a +3 st")
+        session.setSpeed(Speed(percent: 75))
+        #expect(session.savedFolder == "/m/a +3 st 75%")
+    }
+
+    @Test func markSavedUsesTheSpeedTheSaveStartedWith() {
+        var session = Self.ready()
+        session.setSpeed(Speed(percent: 80))
+        session.markSaved("/m/a 75%", speed: Speed(percent: 75))
+        #expect(session.savedFolder == nil)
+        session.setSpeed(Speed(percent: 75))
+        #expect(session.savedFolder == "/m/a 75%")
+    }
+
+    @Test func lostStemsResetSpeed() {
+        var session = Self.ready()
+        session.setSpeed(Speed(percent: 75))
+        _ = session.handle(.failure(EngineFailure(.noStems)), level: .base)
+        #expect(session.speed == .normal)
+    }
+
+    @Test func leavingTheStudioKeepsSpeed() {
+        var session = Self.ready()
+        session.setSpeed(Speed(percent: 50))
+        session.engineStopped()
+        _ = session.startCommands(mix: Self.mix, telemetry: false)
+        #expect(session.speed.percent == 50)
+    }
+
     // MARK: Key over the clip
 
     private static let am = MusicalKey(pitchClass: 9, mode: .minor)

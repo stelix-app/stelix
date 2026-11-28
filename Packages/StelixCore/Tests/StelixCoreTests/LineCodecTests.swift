@@ -29,6 +29,8 @@ struct LineCodecTests {
         .scanKeys(path: "/m/a.mp3", folder: "/m/a", done: nil),
         .scanKeys(path: "/m/a.mp3", folder: "/m/a", done: KeyScan(duration: 60, windows: [KeyWindow(index: 4, key: nil)])),
         .setTranspose(semitones: -12),
+        .setSpeed(percent: 75),
+        .setSpeed(percent: 125),
         .shutdown,
     ]
 

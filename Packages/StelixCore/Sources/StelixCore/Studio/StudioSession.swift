@@ -60,16 +60,26 @@ public struct StudioSession: Sendable, Equatable {
     public private(set) var source: Source?
     /// The level the loaded stems were made with.
     public private(set) var stemsLevel: StudioLevel?
-    /// The folder in `~/Music/Stelix` where these stems were saved at the current transpose; `nil` until
-    /// saved at that value. Another transpose is another save, in a new folder.
-    public var savedFolder: String? { savedFolders[transpose.semitones] }
-    /// The saved folders of these stems, by semitones.
-    private var savedFolders: [Int: String] = [:]
+    /// The folder in `~/Music/Stelix` where these stems were saved at the current transpose and speed;
+    /// `nil` until saved at those values. Another transpose or speed is another save, in a new folder.
+    public var savedFolder: String? { savedFolders[SaveKey(transpose, speed)] }
+    /// The saved folders of these stems, by semitones and speed.
+    private var savedFolders: [SaveKey: String] = [:]
+    private struct SaveKey: Hashable, Sendable {
+        let semitones: Int
+        let percent: Int
+        init(_ transpose: Transpose, _ speed: Speed) {
+            semitones = transpose.semitones
+            percent = speed.percent
+        }
+    }
     /// The peaks of the recording in progress, at most `waveCap`, the most recent at the end.
     public private(set) var wave: [Float] = []
     /// The transpose of the open clip. It stays while the clip is open (also across Change model and
     /// leaving the Studio) and goes back to 0 with the stems of a new clip, or when the stems are lost.
     public private(set) var transpose: Transpose = .off
+    /// The speed of the open clip: the same life as `transpose`.
+    public private(set) var speed: Speed = .normal
 
     /// The job to redo with Retry; `nil` if what failed was not a job (the player).
     private var retryJob: Job?
@@ -191,10 +201,18 @@ public struct StudioSession: Sendable, Equatable {
         return awaitingEngine ? [] : [.setTranspose(semitones: value.semitones)]
     }
 
-    /// `transpose`: the value the save started with, which the user may have changed meanwhile.
-    public mutating func markSaved(_ folder: String, transpose: Transpose? = nil) {
+    /// Like `setTranspose`.
+    @discardableResult
+    public mutating func setSpeed(_ value: Speed) -> [Command] {
+        guard result != nil, value != speed else { return [] }
+        speed = value
+        return awaitingEngine ? [] : [.setSpeed(percent: value.percent)]
+    }
+
+    /// `transpose` and `speed`: the values the save started with, which the user may have changed meanwhile.
+    public mutating func markSaved(_ folder: String, transpose: Transpose? = nil, speed: Speed? = nil) {
         guard result != nil else { return }
-        savedFolders[(transpose ?? self.transpose).semitones] = folder
+        savedFolders[SaveKey(transpose ?? self.transpose, speed ?? self.speed)] = folder
     }
 
     /// The space bar: only where the play button is, with the stems ready.
@@ -254,9 +272,9 @@ public struct StudioSession: Sendable, Equatable {
         defer { playOnStart = false }
         guard let result else { return [] }
         startingPlay = playOnStart ? 0 : nil
-        // Every load starts the player at 0: the transpose follows the stems.
+        // Every load starts the player at 0 semitones and 100%: the transpose and the speed follow the stems.
         return [.setMix(mix), .loadStems(result, position: position)]
-            + (transpose.isOff ? [] : [.setTranspose(semitones: transpose.semitones)])
+            + soundCommands
             + (playOnStart ? [.player(.play)] : [])
             + (telemetry ? [.setTelemetry(true)] : [])
             + scanKeysCommand(result)
@@ -332,13 +350,16 @@ public struct StudioSession: Sendable, Equatable {
             source = jobSource
             stemsLevel = jobLevel ?? stemsLevel ?? level
             savedFolders = [:]
-            if jobIsNewClip { transpose = .off }
+            if jobIsNewClip {
+                transpose = .off
+                speed = .normal
+            }
             position = 0
             pendingSeek = nil
             playing = false
             stage = .ready(newResult)
-            // The player loaded them at 0: a transpose kept across Change Model goes to it again.
-            return transpose.isOff ? [] : [.setTranspose(semitones: transpose.semitones)]
+            // The player loaded them at 0 and 100%: a transpose and a speed kept across Change Model go to it again.
+            return soundCommands
         case .player(let newPosition, _, let isPlaying):
             if let stale = startingPlay, !isPlaying, stale < Self.maxStaleTicks {
                 startingPlay = stale + 1
@@ -402,12 +423,19 @@ public struct StudioSession: Sendable, Equatable {
             stemsLevel = nil
             savedFolders = [:]
             transpose = .off
+            speed = .normal
         }
         retryJob = nil
         stage = .failed(failure)
     }
 
     // MARK: - Supporto
+
+    /// The transpose and the speed for a player that has just loaded the stems (at 0 semitones and 100%).
+    private var soundCommands: [Command] {
+        (transpose.isOff ? [] : [.setTranspose(semitones: transpose.semitones)])
+            + (speed.isNormal ? [] : [.setSpeed(percent: speed.percent)])
+    }
 
     /// The key windows a new engine still has to analyze, from the clip's source: none when the scan is
     /// complete, the clip is too short for a window, or the source is not known.

@@ -92,7 +92,7 @@ public final class DemoEngine: EngineConnection {
             emitPlayer(playing: false)
         case .setTelemetry(let on):
             playback.withLock { $0.telemetry = on }
-        case .setLiveLevel, .setMix, .clearStudio, .setTranspose, .scanKeys:
+        case .setLiveLevel, .setMix, .clearStudio, .setTranspose, .setSpeed, .scanKeys:
             break
         }
     }

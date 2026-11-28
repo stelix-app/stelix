@@ -29,6 +29,9 @@ public enum Command: Codable, Sendable, Equatable {
     /// The transpose, from -12 to +12 (`Transpose.range`); 0 is off. Live and Studio never live in the same
     /// engine: like `setMix`, the one that is active takes it.
     case setTranspose(semitones: Int)
+    /// The Studio's speed, from 50 to 125 percent (`Speed.range`); 100 is the track as it is. Only the
+    /// Studio player takes it.
+    case setSpeed(percent: Int)
     /// A new Studio engine goes on with the key windows of the stems in `folder` that `done` does not have,
     /// from their source at `path` (`KeyScan`).
     case scanKeys(path: String, folder: String, done: KeyScan?)
