@@ -17,30 +17,33 @@ public enum StemSaver {
     /// recording is the audio as it was captured, and stays as it is.
     ///
     /// With a `transpose` other than 0 the folder carries the semitones; the drums and the recording are
-    /// copied as they are, the other 5 stems go through `StemTransposer`, in parallel. `progress` gets 0...1
-    /// at most every 1%, ending at 1; `cancel` stops it with `CancellationError`, and the folder goes as
-    /// after any error.
+    /// copied as they are, the other 5 stems go through `StemTransposer`, in parallel. With a `speed` other
+    /// than 100% the folder carries it too, after the semitones, and all 6 stems go through it, the drums with
+    /// 0 semitones; the recording is still copied as it is. `progress` gets 0...1 at most every 1%, ending
+    /// at 1; `cancel` stops it with `CancellationError`, and the folder goes as after any error.
     public static func save(_ result: StemsResult, recording: URL?, sourceName: String?,
                             root: URL = StudioFolder.defaultRoot, date: Date,
                             names: (Stem) -> String, recordingName: String,
                             provenance: StemProvenance? = nil, transpose: Transpose = .off,
-                            cancel: SaveCancel? = nil,
+                            speed: Speed = .normal, cancel: SaveCancel? = nil,
                             progress: (@Sendable (Double) -> Void)? = nil) throws -> URL {
         let fm = FileManager.default
-        let folder = try StudioFolder.make(root: root, date: date, sourceName: sourceName, transpose: transpose)
+        let folder = try StudioFolder.make(root: root, date: date, sourceName: sourceName, transpose: transpose,
+                                           speed: speed)
         do {
-            var shifted: [(source: URL, saved: URL)] = []
+            var shifted: [Shift] = []
             for stem in Stem.studio {
                 guard let path = result.files[stem] else { throw CocoaError(.fileNoSuchFile) }
                 let saved = folder.appending(path: names(stem))
-                if transpose.isOff || stem == .drums {
+                let semitones = stem == .drums ? 0 : transpose.semitones
+                if semitones == 0 && speed.isNormal {
                     try fm.copyItem(at: URL(fileURLWithPath: path), to: saved)
                 } else {
-                    shifted.append((URL(fileURLWithPath: path), saved))
+                    shifted.append(Shift(source: URL(fileURLWithPath: path), saved: saved, semitones: semitones))
                 }
             }
             if !shifted.isEmpty {
-                try transposeAll(shifted, semitones: transpose.semitones, cancel: cancel, progress: progress)
+                try transposeAll(shifted, speed: speed, cancel: cancel, progress: progress)
             }
             if let provenance {
                 for stem in Stem.studio {
@@ -58,8 +61,14 @@ public enum StemSaver {
         return folder
     }
 
+    private struct Shift {
+        let source: URL
+        let saved: URL
+        let semitones: Int
+    }
+
     /// One time pitch per stem, all together. The first error stops the others and is thrown.
-    private static func transposeAll(_ stems: [(source: URL, saved: URL)], semitones: Int, cancel: SaveCancel?,
+    private static func transposeAll(_ stems: [Shift], speed: Speed, cancel: SaveCancel?,
                                      progress: (@Sendable (Double) -> Void)?) throws {
         let total = stems.reduce(0) { sum, stem in
             sum + Int((try? AVAudioFile(forReading: stem.source).length) ?? 0)
@@ -69,8 +78,8 @@ public enum StemSaver {
             (Array(repeating: 0, count: stems.count), -1, nil))
         DispatchQueue.concurrentPerform(iterations: stems.count) { index in
             do {
-                try StemTransposer.transpose(stems[index].source, to: stems[index].saved, semitones: semitones,
-                                             cancel: stop) { frames in
+                try StemTransposer.transpose(stems[index].source, to: stems[index].saved,
+                                             semitones: stems[index].semitones, speed: speed, cancel: stop) { frames in
                     state.withLock { state in
                         state.done[index] = frames
                         let fraction = total > 0 ? Double(state.done.reduce(0, +)) / Double(total) : 1
