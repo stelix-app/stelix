@@ -177,13 +177,18 @@ struct StudioView: View {
                 VStack(alignment: .leading, spacing: Tokens.spaceS) {
                     stems(result)
                     // Under the last stem, above play and "to the start", as in Live (Gabriele, 13/11).
-                    MusicRow(bpm: result.bpm(at: studio.position),
+                    // The tempo that is heard: the track's times the speed.
+                    MusicRow(bpm: result.bpm(at: studio.position).map { $0 * studio.speed.factor },
                              key: result.key(at: studio.position)?.transposed(by: studio.transpose.semitones),
                              showsAnalysis: MusicRow.analysisAvailable,
                              transpose: studio.transpose,
                              onRaise: { studio.raiseTranspose() },
                              onLower: { studio.lowerTranspose() },
                              onSet: { studio.setTranspose($0) })
+                    SpeedRow(speed: studio.speed,
+                             onRaise: { studio.raiseSpeed() },
+                             onLower: { studio.lowerSpeed() },
+                             onSet: { studio.setSpeed($0) })
                     AnalysisNotice()
                     SoloHint()
                 }
@@ -274,7 +279,7 @@ struct StudioView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 if let progress = studio.saveProgress {
-                    // A transposed save: how far it is, and the way out.
+                    // A transposed or stretched save: how far it is, and the way out.
                     ProgressView(value: progress)
                         .progressViewStyle(.linear)
                         .controlSize(.small)

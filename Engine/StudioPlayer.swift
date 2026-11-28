@@ -8,10 +8,12 @@ import StelixCore
 import Synchronization
 
 /// The Studio player: `AVAudioEngine` with one `AVAudioPlayerNode` per stem, connected by `StudioGraph`
-/// (all on the main mixer at 0 semitones; the stems but the drums through the time pitch otherwise).
-/// They are started together at the same `AVAudioTime`; pause and seek stop all the nodes and reschedule
-/// them from the right frame, so they stay in sync. Every load starts at 0 semitones: the app sends the
-/// transpose after the stems (`StudioSession`).
+/// (all on the main mixer at 0 semitones and 100%; the stems but the drums through the time pitch when
+/// transposed; at another speed the drums through one of their own too). They are started together at the
+/// same `AVAudioTime`; pause, seek and a new speed stop all the nodes and reschedule them from the right
+/// frame, so they stay in sync. Positions are frames of the files: the track's time, whatever the speed.
+/// Every load starts at 0 semitones and 100%: the app sends the transpose and the speed after the stems
+/// (`StudioSession`).
 ///
 /// - `.setMix` → `node.volume = effectiveGain`;
 /// - `.player(position:duration:playing:)` at 10 Hz while it plays, and at every state change;
@@ -99,31 +101,63 @@ final class StudioPlayer: @unchecked Sendable {
         queue.async { [self] in telemetry = on }
     }
 
-    /// Between two values only the pitch changes, playing. Crossing 0 rewires the graph: a pause with its
-    /// fade, then on from the same point if it was playing. Without stems: nothing.
+    /// Between two values only the pitch changes, playing. A change of the graph's shape (crossing 0 at
+    /// 100%) rewires it: a pause with its fade, then on from the same point if it was playing. Without
+    /// stems: nothing.
     func setTranspose(_ value: Transpose) {
         queue.async { [self] in
-            guard let graph, let engine else { return }
-            guard value.isOff != graph.transpose.isOff else {
+            guard let graph else { return }
+            guard graph.needsRewire(transpose: value, speed: graph.speed) else {
                 graph.setTranspose(value)
                 return
             }
-            let wasPlaying = playing
-            let here = position
+            rewire { graph.setTranspose(value) }
+        }
+    }
+
+    /// Crossing 100% rewires the graph, like the transpose crossing 0. Between two other speeds, playing,
+    /// a short restart from the same point: the two time pitches take the new rate at the same sample, and
+    /// the drums stay in time with the rest. Without stems: nothing.
+    func setSpeed(_ value: Speed) {
+        queue.async { [self] in
+            guard let graph else { return }
+            guard !graph.needsRewire(transpose: graph.transpose, speed: value) else {
+                rewire { graph.setSpeed(value) }
+                return
+            }
+            guard playing else {
+                graph.setSpeed(value)
+                return
+            }
             fadeOut()
+            let here = position
             for node in nodes.values { node.stop() }
             playing = false
-            engine.stop()
-            graph.setTranspose(value)
-            installTaps()
-            engine.prepare()
-            do { try engine.start() } catch {
-                emit(.failure(EngineFailure(.outputUnplayable)))
-            }
+            graph.setSpeed(value)
             startFrame = here
-            if wasPlaying { play() }
+            play()
             emitState()
         }
+    }
+
+    /// Stops the engine, applies `change` to the graph, starts again from the same point, playing if it was.
+    private func rewire(_ change: () -> Void) {
+        guard let engine else { return }
+        let wasPlaying = playing
+        let here = position
+        fadeOut()
+        for node in nodes.values { node.stop() }
+        playing = false
+        engine.stop()
+        change()
+        installTaps()
+        engine.prepare()
+        do { try engine.start() } catch {
+            emit(.failure(EngineFailure(.outputUnplayable)))
+        }
+        startFrame = here
+        if wasPlaying { play() }
+        emitState()
     }
 
     func stopAndWait() {
@@ -217,13 +251,12 @@ final class StudioPlayer: @unchecked Sendable {
     }
 
     /// From the clock node (the drums, which start as late as the time pitch delays the rest), minus what is
-    /// still in the limiter.
+    /// still on its way to the output (`StudioGraph.heardFrames`), in frames of the files.
     private var position: AVAudioFramePosition {
         guard playing else { return startFrame }
         guard let graph, let nodeTime = graph.clockNode.lastRenderTime,
               let playerTime = graph.clockNode.playerTime(forNodeTime: nodeTime) else { return max(startFrame, lastPosition) }
-        let heard = playerTime.sampleTime - AVAudioFramePosition(graph.latencyFrames)
-        return min(lengthFrames, startFrame + max(0, heard))
+        return min(lengthFrames, startFrame + graph.heardFrames(clockSampleTime: playerTime.sampleTime))
     }
 
     private func play() {
@@ -241,7 +274,11 @@ final class StudioPlayer: @unchecked Sendable {
         // All at the same instant (the drums as late as the time pitch delays the rest), 50 ms in the
         // future: enough to reach all the nodes.
         let start = AVAudioTime(hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: 0.05))
-        fadeIn(after: 0.05 + Double(graph.drumsDelayFrames + graph.latencyFrames) / sampleRate)
+        // At another speed the nodes live in their time pitch's time, which runs `factor` per output frame,
+        // and the lead may stretch with it (it does with a sample time, measured on 28/11): the fade waits
+        // for the later of the two, at worst 50 ms of music come in muted rather than with a click.
+        let lead = graph.shape == .stretched ? 0.05 / min(1, graph.speed.factor) : 0.05
+        fadeIn(after: lead + Double(graph.startDelayFrames) / sampleRate)
         graph.play(at: start)
         lastPosition = startFrame
         playing = true

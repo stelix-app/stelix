@@ -136,6 +136,27 @@ enum Copy {
         }
     }
 
+    static var speed: String { String(localized: "speed.label", defaultValue: "Speed") }
+
+    /// In place of "Speed" after a value the field refuses.
+    static var speedRange: String {
+        let low = speedValue(Speed(percent: Speed.range.lowerBound))
+        let high = speedValue(Speed(percent: Speed.range.upperBound))
+        return String(localized: "speed.range", defaultValue: "From \(low) to \(high)")
+    }
+
+    /// "75%": the same in every language.
+    static func speedValue(_ speed: Speed) -> String {
+        "\(speed.percent)%"
+    }
+
+    /// For VoiceOver: "Normal speed", "75 percent speed".
+    static func speedSpoken(_ speed: Speed) -> String {
+        guard !speed.isNormal else { return String(localized: "speed.spoken.normal", defaultValue: "Normal speed") }
+        let percent = String(speed.percent)
+        return String(localized: "speed.spoken", defaultValue: "\(percent) percent speed")
+    }
+
     private static func oneDecimal(_ value: Double) -> String {
         value.formatted(.number.precision(.fractionLength(1)))
     }

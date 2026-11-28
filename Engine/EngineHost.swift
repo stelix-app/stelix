@@ -81,6 +81,9 @@ final class EngineHost: Sendable {
                 // Like the mix: Live and Studio never live in the same engine, the one not active keeps only the value.
                 live.setTranspose(Transpose(semitones: semitones))
                 player.setTranspose(Transpose(semitones: semitones))
+            case .setSpeed(let percent):
+                // Only the Studio has a speed: the Live cannot play ahead of what the Mac sends.
+                player.setSpeed(Speed(percent: percent))
             case .shutdown:
                 exitOnce()
             case .startRecording:

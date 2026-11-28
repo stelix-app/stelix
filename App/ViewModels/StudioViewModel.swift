@@ -45,7 +45,7 @@ import UniformTypeIdentifiers
     private(set) var levels: [Stem: Float] = [:]
     /// Save is copying the stems into `~/Music/Stelix`.
     private(set) var saving = false
-    /// A transposed save in progress, from 0 to 1; `nil` otherwise (a plain copy shows no bar).
+    /// A transposed or stretched save in progress, from 0 to 1; `nil` otherwise (a plain copy shows no bar).
     private(set) var saveProgress: Double?
     /// "Change model" pressed: the picker is free again, the next level separates the track again.
     private(set) var changingModel = false
@@ -294,6 +294,11 @@ import UniformTypeIdentifiers
     func lowerTranspose() { send(session.setTranspose(session.transpose.lowered())) }
     func setTranspose(_ value: Transpose) { send(session.setTranspose(value)) }
 
+    var speed: Speed { session.speed }
+    func raiseSpeed() { send(session.setSpeed(session.speed.raised())) }
+    func lowerSpeed() { send(session.setSpeed(session.speed.lowered())) }
+    func setSpeed(_ value: Speed) { send(session.setSpeed(value)) }
+
     func apply(_ preset: Preset) {
         soloMemory.forget()
         mix = mix.applying(preset)
@@ -315,15 +320,16 @@ import UniformTypeIdentifiers
 
     /// Copies the stems (and the recording, if they come from there) into a new folder of `~/Music/Stelix`,
     /// with the current date. The copy runs off the MainActor: 20 minutes are about 2.5 GB. With a transpose
-    /// the stems but the drums are transposed (the value when Save is pressed: it can change meanwhile), with
-    /// a progress bar and Cancel.
+    /// the stems but the drums are transposed, at another speed all the stems are stretched (the values when
+    /// Save is pressed: they can change meanwhile), with a progress bar and Cancel.
     func save() {
         guard session.canSave, !saving, let result = session.result, let source = session.source else { return }
         saving = true
         let transpose = session.transpose
+        let speed = session.speed
         let cancel = SaveCancel()
         saveCancel = cancel
-        saveProgress = transpose.isOff ? nil : 0
+        saveProgress = transpose.isOff && speed.isNormal ? nil : 0
         let recording: URL?
         let sourceName: String?
         switch source {
@@ -352,7 +358,7 @@ import UniformTypeIdentifiers
                 do {
                     return .success(try StemSaver.save(result, recording: recording, sourceName: sourceName, date: date,
                                                        names: { names[$0] ?? $0.fileName }, recordingName: recordingName,
-                                                       provenance: provenance, transpose: transpose,
+                                                       provenance: provenance, transpose: transpose, speed: speed,
                                                        cancel: cancel, progress: progress))
                 } catch is CancellationError {
                     return nil
@@ -369,13 +375,13 @@ import UniformTypeIdentifiers
             // Other stems have arrived in the meantime: these are no longer the ones to save.
             guard self.session.result == result else { return }
             switch saved {
-            case .success(let folder): self.session.markSaved(folder.path, transpose: transpose)
+            case .success(let folder): self.session.markSaved(folder.path, transpose: transpose, speed: speed)
             case .failure(let failure): self.session.fail(failure.message)
             }
         }
     }
 
-    /// Stops a transposed save; its folder is deleted. A plain copy is short and is not stopped.
+    /// Stops a transposed or stretched save; its folder is deleted. A plain copy is short and is not stopped.
     func cancelSave() {
         guard saveProgress != nil else { return }
         saveCancel?.cancel()
