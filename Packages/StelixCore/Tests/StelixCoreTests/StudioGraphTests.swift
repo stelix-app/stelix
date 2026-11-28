@@ -72,6 +72,12 @@ struct StudioGraphTests {
             engine.stop()
             graph.setTranspose(transpose)
         }
+
+        func rewire(_ transpose: Transpose, _ speed: Speed) throws {
+            engine.stop()
+            graph.setTranspose(transpose)
+            graph.setSpeed(speed)
+        }
     }
 
     private static func constant(_ value: Float) -> [Float] { [Float](repeating: value, count: Int(rate) * 2 * 2) }
@@ -156,5 +162,130 @@ struct StudioGraphTests {
         try fixture.start(from: AVAudioFramePosition(Self.rate * 1.5))
         let after = try fixture.render(fixture.graph.drumsDelayFrames + fixture.graph.latencyFrames + 4096)
         #expect(after.map(abs).max()! < 1e-4)
+    }
+
+    // MARK: Speed (Task 12.1)
+
+    /// The time pitch's reported latency is off by up to about 11 ms at 50% (measured on 28/11): the start of
+    /// a sound is checked against it within 15 ms.
+    static let speedTolerance = Int(rate * 0.015)
+
+    /// Vocals and drums, the same click at 0.5 s of the file, one at a time, in slices as small as a real
+    /// output's: they come out together, at the stretched time after the start delay.
+    @Test(arguments: [50, 75, 125], [0, 3])
+    func drumsAlignWithTheRestAtSpeed(percent: Int, semitones: Int) throws {
+        let frames = Int(Self.rate) * 3
+        let click = AudioTestSignals.click(frames: frames, at: Int(Self.rate / 2), rate: Self.rate)
+        let fixture = try Fixture(vocals: click, drums: click, slice: 512)
+        let speed = Speed(percent: percent)
+        try fixture.rewire(Transpose(semitones: semitones), speed)
+        #expect(fixture.graph.drumsDelayFrames == 0)
+        var onsets: [Stem: Int] = [:]
+        var delay = 0
+        for solo in [Stem.vocals, .drums] {
+            for (stem, node) in fixture.graph.nodes { node.volume = stem == solo ? 1 : 0 }
+            try fixture.start(lead: 2205)
+            delay = fixture.graph.startDelayFrames
+            onsets[solo] = AudioTestSignals.onset(try fixture.render(Int(Self.rate * 1.5)), rate: Self.rate)
+            fixture.engine.stop()
+            fixture.engine.reset()
+        }
+        let vocals = try #require(onsets[.vocals]), drums = try #require(onsets[.drums])
+        #expect(abs(vocals - drums) <= 44, "vocals \(vocals), drums \(drums)")
+        let clickAt = AudioTestSignals.onset(click, rate: Self.rate) ?? 0
+        // The start time is in the nodes' own time, which runs `factor` per output frame: the lead is
+        // stretched too.
+        let expected = Int((Double(2205 + clickAt) / speed.factor).rounded()) + delay
+        #expect(abs(vocals - expected) <= Self.speedTolerance, "vocals \(vocals), expected \(expected)")
+    }
+
+    /// The speed never changes the pitch: 440 Hz stays 440 Hz at 75%, and +3 semitones is still 523 Hz.
+    @Test(arguments: [(0, 440.0), (3, 523.25)])
+    func pitchUnchangedAtSpeed(semitones: Int, hertz: Double) throws {
+        let frames = Int(Self.rate) * 3
+        var sine = [Float](repeating: 0, count: frames * 2)
+        for f in 0..<frames {
+            let v = Float(0.3 * sin(2 * Double.pi * 440 * Double(f) / Self.rate))
+            sine[f * 2] = v
+            sine[f * 2 + 1] = v
+        }
+        let fixture = try Fixture(vocals: sine, drums: [Float](repeating: 0, count: frames * 2))
+        try fixture.rewire(Transpose(semitones: semitones), Speed(percent: 75))
+        try fixture.start()
+        let out = try fixture.render(Int(Self.rate * 1.5))
+        let measured = Self.frequency(Array(out[Int(Self.rate) * 2..<Int(Self.rate * 1.5) * 2]), rate: Self.rate)
+        #expect(abs(measured - hertz) < 4, "\(measured) Hz")
+    }
+
+    /// The clock counts file frames: after a second of output, about (a second − the start delay) × speed.
+    @Test(arguments: [50, 125])
+    func clockNodeCountsFileFramesAtSpeed(percent: Int) throws {
+        let fixture = try Fixture(vocals: Self.constant(0.1), drums: Self.constant(0.2))
+        let speed = Speed(percent: percent)
+        try fixture.rewire(.off, speed)
+        try fixture.start()
+        _ = try fixture.render(44_100)
+        let node = fixture.graph.clockNode
+        let time = try #require(node.lastRenderTime.flatMap { node.playerTime(forNodeTime: $0) })
+        let heard = fixture.graph.heardFrames(clockSampleTime: time.sampleTime)
+        let expected = Int((Double(44_100 - fixture.graph.startDelayFrames) * speed.factor).rounded())
+        #expect(abs(Int(heard) - expected) < 1024, "\(heard), expected \(expected)")
+    }
+
+    /// A seek at 75%: nothing from before it comes out, and a click after it comes at its stretched time.
+    @Test func seekAtSpeedStartsAtTheRightFrame() throws {
+        let frames = Int(Self.rate) * 3
+        var signal = AudioTestSignals.click(frames: frames, at: Int(Self.rate * 0.97), rate: Self.rate)
+        let later = AudioTestSignals.click(frames: frames, at: Int(Self.rate * 2), rate: Self.rate)
+        for i in signal.indices { signal[i] += later[i] }
+        let fixture = try Fixture(vocals: signal, drums: [Float](repeating: 0, count: frames * 2))
+        let speed = Speed(percent: 75)
+        try fixture.rewire(Transpose(semitones: 3), speed)
+        try fixture.start()
+        _ = try fixture.render(Int(Self.rate * 1.2))
+        for node in fixture.graph.nodes.values { node.stop() }
+        try fixture.start(from: AVAudioFramePosition(Self.rate * 1.5))
+        let delay = fixture.graph.startDelayFrames
+        let after = try fixture.render(delay + Int(Self.rate))
+        let quiet = after[0..<(delay + 4096) * 2]
+        #expect(quiet.map(abs).max()! < 1e-4)
+        let onset = try #require(AudioTestSignals.onset(after, rate: Self.rate))
+        let expected = delay + Int((Self.rate * 0.5 / speed.factor).rounded())
+        #expect(abs(onset - expected) <= Self.speedTolerance, "\(onset), expected \(expected)")
+    }
+
+    @Test func needsRewireOnlyWhenTheShapeChanges() throws {
+        let fixture = try Fixture(vocals: Self.constant(0.1), drums: Self.constant(0.2))
+        let graph = fixture.graph
+        #expect(graph.needsRewire(transpose: Transpose(semitones: 3), speed: .normal))
+        try fixture.rewire(Transpose(semitones: 3), .normal)
+        #expect(!graph.needsRewire(transpose: Transpose(semitones: 5), speed: .normal))
+        #expect(graph.needsRewire(transpose: Transpose(semitones: 3), speed: Speed(percent: 75)))
+        try fixture.rewire(Transpose(semitones: 3), Speed(percent: 75))
+        #expect(!graph.needsRewire(transpose: .off, speed: Speed(percent: 50)))
+        try fixture.rewire(.off, Speed(percent: 50))
+        #expect(graph.needsRewire(transpose: .off, speed: .normal))
+        #expect(graph.shape == .stretched)
+    }
+
+    /// Back to 0 semitones and 100%: the direct sum of 1.0.0 again.
+    @Test func backToNormalIsTheDirectSum() throws {
+        let fixture = try Fixture(vocals: Self.constant(0.1), drums: Self.constant(0.2))
+        try fixture.rewire(Transpose(semitones: 3), Speed(percent: 75))
+        try fixture.rewire(.off, .normal)
+        #expect(fixture.graph.latencyFrames == 0 && fixture.graph.startDelayFrames == 0)
+        try fixture.start()
+        let out = try fixture.render(8192)
+        #expect(abs(out[8000 * 2] - 0.3) < 1e-6)
+    }
+
+    /// From the zero crossings going up, between the first and the last.
+    private static func frequency(_ interleaved: [Float], rate: Double) -> Double {
+        var crossings: [Int] = []
+        for f in 1..<(interleaved.count / 2) where interleaved[(f - 1) * 2] < 0 && interleaved[f * 2] >= 0 {
+            crossings.append(f)
+        }
+        guard let first = crossings.first, let last = crossings.last, crossings.count > 1 else { return 0 }
+        return Double(crossings.count - 1) * rate / Double(last - first)
     }
 }
