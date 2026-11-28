@@ -184,6 +184,7 @@ struct StudioView: View {
                              onRaise: { studio.raiseTranspose() },
                              onLower: { studio.lowerTranspose() },
                              onSet: { studio.setTranspose($0) })
+                    AnalysisNotice()
                     SoloHint()
                 }
                 transport(result)

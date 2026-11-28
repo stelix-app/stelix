@@ -171,6 +171,23 @@
         }
       }
     },
+    "analysis.notice": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BPM and key detection requires macOS 27 or later."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il rilevamento di BPM e tonalità richiede macOS 27 o versioni successive."
+          }
+        }
+      }
+    },
     "close": {
       "extractionState": "manual",
       "localizations": {

@@ -59,6 +59,10 @@ enum Copy {
     /// VoiceOver action on a stem's icon.
     static var stemSolo: String { String(localized: "stem.solo", defaultValue: "Solo") }
     static var stemSoloHint: String { String(localized: "stem.soloHint", defaultValue: "Hold a stem to hear it alone") }
+    /// Before macOS 27, under the transpose, until closed in this run of the app.
+    static var analysisNotice: String {
+        String(localized: "analysis.notice", defaultValue: "BPM and key detection requires macOS 27 or later.")
+    }
     static var liveBluetooth: String { String(localized: "live.bluetooth", defaultValue: "Bluetooth output: the delay may be higher.") }
 
     static var studioRecord: String { String(localized: "studio.record", defaultValue: "Record") }

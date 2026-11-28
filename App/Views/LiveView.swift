@@ -56,6 +56,7 @@ struct LiveView: View {
                          onRaise: { live.raiseTranspose() },
                          onLower: { live.lowerTranspose() },
                          onSet: { live.setTranspose($0) })
+                AnalysisNotice()
                 SoloHint()
             }
 
